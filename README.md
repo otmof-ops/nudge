@@ -1,6 +1,8 @@
 # nudge
 
 [![ShellCheck](https://github.com/otmof-ops/nudge/actions/workflows/validate-pr.yml/badge.svg)](https://github.com/otmof-ops/nudge/actions/workflows/validate-pr.yml)
+[![Latest Release](https://img.shields.io/github/v/release/otmof-ops/nudge?label=release)](https://github.com/otmof-ops/nudge/releases)
+[![License](https://img.shields.io/badge/license-Proprietary-red)](EULA/OFFTRACKMEDIA_EULA_2025.txt)
 
 **A gentle nudge to keep your system fresh.**
 
@@ -164,6 +166,21 @@ nudge.sh --help         # Show help
 ## Safety
 
 nudge runs `sudo apt full-upgrade` when you accept an update. Please read [SAFETY.md](SAFETY.md) before use — it covers the risks of automated system updates, PPA concerns, and shared-account considerations.
+
+## Security
+
+To report a security vulnerability, **do not open a public issue.** See [SECURITY.md](SECURITY.md) for the responsible disclosure process.
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the Contributor License Agreement, code conventions, and PR process.
+
+## Project
+
+- [ROADMAP.md](ROADMAP.md) — Feature roadmap (v1.0 → v2.0)
+- [CHANGELOG.md](CHANGELOG.md) — Release history
+- [CREDITS-AND-COMMUNITY.md](CREDITS-AND-COMMUNITY.md) — Attribution and IP framework
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — Community standards
 
 ## License
 

@@ -1,0 +1,22 @@
+# Normalize line endings
+* text=auto
+
+# Shell scripts
+*.sh text eol=lf
+
+# Configuration
+*.conf text eol=lf
+*.desktop text eol=lf
+
+# Markdown
+*.md text eol=lf
+
+# YAML
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Ensure these are treated as binary
+*.pdf binary
+*.png binary
+*.jpg binary
+*.gif binary

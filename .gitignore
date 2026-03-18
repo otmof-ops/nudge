@@ -1,0 +1,27 @@
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editors
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Shell
+*.log
+*.bak
+*.tmp
+
+# Environment
+.env
+.env.*
+
+# Build artifacts
+*.tar.gz
+*.zip
+dist/
