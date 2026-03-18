@@ -1,274 +1,438 @@
 #!/usr/bin/env bash
 # nudge — A gentle nudge to keep your system fresh.
 # Copyright (c) 2026 OFFTRACKMEDIA Studios. All rights reserved.
-# Version: 1.1.0
+# Version: 2.0.0
 
 set -euo pipefail
 
-VERSION="1.1.0"
-CONF="${HOME}/.config/nudge.conf"
-LOCK="/tmp/nudge-${UID}.lock"
+NUDGE_VERSION="2.0.0"
+_NUDGE_START_TIME=$(date +%s)
+_NUDGE_TRIGGER="${_NUDGE_TRIGGER:-manual}"
 
-# --- Default config values ---
-ENABLED=true
-DELAY=45
-CHECK_SECURITY=true
-AUTO_DISMISS=0
-UPDATE_COMMAND="sudo apt update && sudo apt full-upgrade"
-NETWORK_HOST="archive.ubuntu.com"
-NETWORK_TIMEOUT=5
-NETWORK_RETRIES=2
-NOTIFICATION_BACKEND="auto"
-LOG_FILE=""
+# --- Locate lib directory ---
+NUDGE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
+if [[ ! -d "$NUDGE_LIB_DIR" ]]; then
+    # Installed location fallback
+    NUDGE_LIB_DIR="${HOME}/.local/lib/nudge"
+fi
+
+if [[ ! -d "$NUDGE_LIB_DIR" ]]; then
+    echo "Error: nudge lib directory not found" >&2
+    exit 1
+fi
+
+# --- Source all modules ---
+# shellcheck source=lib/output.sh
+source "$NUDGE_LIB_DIR/output.sh"
+# shellcheck source=lib/config.sh
+source "$NUDGE_LIB_DIR/config.sh"
+# shellcheck source=lib/lock.sh
+source "$NUDGE_LIB_DIR/lock.sh"
+# shellcheck source=lib/network.sh
+source "$NUDGE_LIB_DIR/network.sh"
+# shellcheck source=lib/pkgmgr.sh
+source "$NUDGE_LIB_DIR/pkgmgr.sh"
+# shellcheck source=lib/notify.sh
+source "$NUDGE_LIB_DIR/notify.sh"
+# shellcheck source=lib/schedule.sh
+source "$NUDGE_LIB_DIR/schedule.sh"
+# shellcheck source=lib/history.sh
+source "$NUDGE_LIB_DIR/history.sh"
+# shellcheck source=lib/safety.sh
+source "$NUDGE_LIB_DIR/safety.sh"
+# shellcheck source=lib/selfupdate.sh
+source "$NUDGE_LIB_DIR/selfupdate.sh"
 
 # --- CLI flags ---
 DRY_RUN=false
 CHECK_ONLY=false
+_JSON_FLAG=false
+_VERBOSE_FLAG=false
 
 # --- Parse arguments ---
-for arg in "$@"; do
-    case "$arg" in
+_HISTORY_CMD=false
+_HISTORY_COUNT=20
+_HISTORY_FORMAT="table"
+_HISTORY_SINCE=""
+_DEFER_CMD=""
+_SELF_UPDATE_CMD=false
+_CONFIG_CMD=false
+_VALIDATE_CMD=false
+_MIGRATE_CMD=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
         --version)
-            echo "nudge $VERSION"
+            echo "nudge $NUDGE_VERSION"
             exit 0
-            ;;
-        --dry-run)
-            DRY_RUN=true
-            ;;
-        --check-only)
-            CHECK_ONLY=true
             ;;
         --help|-h)
-            echo "nudge $VERSION — A gentle nudge to keep your system fresh."
-            echo ""
-            echo "Usage: nudge.sh [OPTIONS]"
-            echo ""
-            echo "Options:"
-            echo "  --version      Print version and exit"
-            echo "  --dry-run      Run checks but don't show dialogs or update"
-            echo "  --check-only   Print update count and exit"
-            echo "  --help, -h     Show this help"
+            cat <<'HELP'
+nudge 2.0.0 — A gentle nudge to keep your system fresh.
+
+Usage: nudge [OPTIONS]
+
+Options:
+  --version              Print version and exit
+  --help, -h             Show this help
+  --dry-run              Run checks but don't show dialogs
+  --check-only           Print update count and exit
+  --json                 Machine-readable JSON output
+  --verbose              Verbose logging to stdout
+  --history [N]          Show last N history records (default: 20)
+  --history --json       Dump raw JSONL history
+  --history --since DATE Filter history by date
+  --defer DURATION       Defer next check (1h, 4h, 1d, 1w)
+  --self-update          Download and install latest nudge
+  --config               Print current resolved configuration
+  --validate             Validate config and exit
+  --migrate              Run config migration manually
+
+Environment:
+  XDG_CONFIG_HOME        Config directory (default: ~/.config)
+  XDG_DATA_HOME          Data directory (default: ~/.local/share)
+
+Files:
+  ~/.config/nudge/nudge.conf    Configuration
+  ~/.local/share/nudge/         State and history
+HELP
             exit 0
             ;;
+        --dry-run)     DRY_RUN=true ;;
+        --check-only)  CHECK_ONLY=true ;;
+        --json)        _JSON_FLAG=true ;;
+        --verbose)     _VERBOSE_FLAG=true ;;
+        --history)
+            _HISTORY_CMD=true
+            if [[ "${2:-}" =~ ^[0-9]+$ ]]; then
+                _HISTORY_COUNT="$2"
+                shift
+            fi
+            ;;
+        --since)
+            _HISTORY_SINCE="${2:-}"
+            shift
+            ;;
+        --defer)
+            _DEFER_CMD="${2:-}"
+            shift
+            ;;
+        --self-update) _SELF_UPDATE_CMD=true ;;
+        --config)      _CONFIG_CMD=true ;;
+        --validate)    _VALIDATE_CMD=true ;;
+        --migrate)     _MIGRATE_CMD=true ;;
     esac
+    shift
 done
 
-# --- Logging helper ---
-log() {
-    local msg
-    msg="[$(date '+%Y-%m-%d %H:%M:%S')] $1"
-    if [[ -n "$LOG_FILE" ]]; then
-        echo "$msg" >> "$LOG_FILE"
+# --- Load config ---
+config_load
+config_ensure_dirs
+output_init
+
+# --- Handle utility commands (no lock needed) ---
+
+if [[ "$_HISTORY_CMD" == "true" ]]; then
+    [[ "$_JSON_FLAG" == "true" ]] && _HISTORY_FORMAT="json"
+    history_show "$_HISTORY_COUNT" "$_HISTORY_FORMAT" "$_HISTORY_SINCE"
+    exit "$EXIT_OK"
+fi
+
+if [[ "$_SELF_UPDATE_CMD" == "true" ]]; then
+    selfupdate_install
+    exit $?
+fi
+
+if [[ -n "$_DEFER_CMD" ]]; then
+    schedule_defer "$_DEFER_CMD"
+    echo "Next check deferred for $_DEFER_CMD"
+    exit "$EXIT_DEFERRED"
+fi
+
+if [[ "$_CONFIG_CMD" == "true" ]]; then
+    config_print
+    exit "$EXIT_OK"
+fi
+
+if [[ "$_VALIDATE_CMD" == "true" ]]; then
+    if config_validate; then
+        echo "Config validation passed"
+        exit "$EXIT_OK"
+    else
+        echo "Config validation failed"
+        exit "$EXIT_CONFIG_ERROR"
     fi
-    if [[ "$DRY_RUN" == "true" ]] || [[ "$CHECK_ONLY" == "true" ]]; then
-        echo "$msg"
+fi
+
+if [[ "$_MIGRATE_CMD" == "true" ]]; then
+    config_migrate
+    echo "Config migration complete"
+    exit "$EXIT_OK"
+fi
+
+# --- Disabled check ---
+if [[ "$ENABLED" != "true" ]]; then
+    log_info "nudge is disabled"
+    exit "$EXIT_DISABLED"
+fi
+
+# --- Signal handling ---
+CLEANUP_PIDS=()
+
+# shellcheck disable=SC2317  # _cleanup is invoked via trap, not directly
+_cleanup() {
+    local sig="${1:-EXIT}"
+    for pid in "${CLEANUP_PIDS[@]}"; do
+        kill "$pid" 2>/dev/null || true
+    done
+    tput cnorm 2>/dev/null || true
+
+    # Calculate duration
+    end_time=$(date +%s)
+    local duration=$(( end_time - _NUDGE_START_TIME ))
+    json_set "duration_seconds" "$duration"
+
+    # Write history on non-EXIT signals
+    if [[ "$sig" != "EXIT" ]]; then
+        history_write "CANCELLED" "Signal: $sig" "$EXIT_INTERRUPTED"
     fi
+
+    lock_release
 }
 
-# --- Load config ---
-if [[ -f "$CONF" ]]; then
-    # shellcheck source=/dev/null
-    source "$CONF"
-fi
+trap '_cleanup EXIT'          EXIT
+trap '_cleanup INT;  exit 11' INT
+trap '_cleanup TERM; exit 11' TERM
+trap '_cleanup HUP;  exit 11' HUP
 
-if [[ "$ENABLED" != "true" ]]; then
-    log "nudge is disabled. Exiting."
-    exit 0
-fi
-
-# --- PID lock (skip for check-only) ---
+# --- Acquire lock (skip for check-only) ---
 if [[ "$CHECK_ONLY" != "true" ]]; then
-    if [[ -f "$LOCK" ]]; then
-        OLD_PID=$(cat "$LOCK" 2>/dev/null || true)
-        if [[ -n "$OLD_PID" ]] && kill -0 "$OLD_PID" 2>/dev/null; then
-            log "Another instance is running (PID $OLD_PID). Exiting."
-            exit 0
-        fi
-        rm -f "$LOCK"
+    if ! lock_acquire; then
+        json_emit "$EXIT_ALREADY_RUNNING"
+        exit "$EXIT_ALREADY_RUNNING"
     fi
-    echo $$ > "$LOCK"
-    trap 'rm -f "$LOCK"' EXIT
+fi
+
+# --- Schedule guard ---
+if [[ "$DRY_RUN" != "true" ]] && [[ "$CHECK_ONLY" != "true" ]]; then
+    if ! schedule_due; then
+        json_emit "$EXIT_OK"
+        exit "$EXIT_OK"
+    fi
+fi
+
+# --- Pending reboot reminder ---
+if safety_check_pending_reboot; then
+    log_warn "Reboot pending from previous upgrade"
+    if [[ "$DRY_RUN" != "true" ]] && [[ "$CHECK_ONLY" != "true" ]]; then
+        notify_detect
+        if notify_reboot; then
+            systemctl reboot 2>/dev/null || sudo reboot 2>/dev/null || true
+        fi
+    fi
 fi
 
 # --- Delay (skip for dry-run and check-only) ---
 if [[ "$DRY_RUN" != "true" ]] && [[ "$CHECK_ONLY" != "true" ]]; then
-    log "Waiting ${DELAY}s before checking for updates."
-    sleep "$DELAY"
+    if [[ "${DELAY:-0}" -gt 0 ]]; then
+        log_info "Waiting ${DELAY}s before checking for updates"
+        sleep "$DELAY"
+    fi
 fi
 
 # --- Network check ---
-check_network() {
-    ping -c 1 -W "$NETWORK_TIMEOUT" "$NETWORK_HOST" &>/dev/null
-}
-
-RETRIES=0
-while ! check_network; do
-    RETRIES=$((RETRIES + 1))
-    if [[ "$RETRIES" -gt "$NETWORK_RETRIES" ]]; then
-        log "Network check failed after $NETWORK_RETRIES retries. Exiting."
-        exit 0
-    fi
-    log "Network check failed. Retry $RETRIES/$NETWORK_RETRIES in 15s."
-    if [[ "$DRY_RUN" != "true" ]] && [[ "$CHECK_ONLY" != "true" ]]; then
-        sleep 15
-    fi
-done
-
-log "Network check passed."
-
-# --- apt lock check ---
-if fuser /var/lib/dpkg/lock-frontend &>/dev/null 2>&1; then
-    log "APT lock held by another process. Exiting."
-    exit 0
+if ! network_check; then
+    network_handle_offline
+    rc=$?
+    json_emit "$rc"
+    exit "$rc"
 fi
 
-# --- Count updates ---
-UPDATES=0
-SECURITY=0
+# --- Detect package manager ---
+if ! detect_pkgmgr; then
+    log_error "No supported package manager found"
+    json_emit "$EXIT_CONFIG_ERROR"
+    exit "$EXIT_CONFIG_ERROR"
+fi
+json_set "pkg_manager" "$DETECTED_PKGMGR"
 
-if [[ -x /usr/lib/update-notifier/apt-check ]]; then
-    APT_CHECK_OUTPUT=$(/usr/lib/update-notifier/apt-check 2>&1 || true)
-    UPDATES=$(echo "$APT_CHECK_OUTPUT" | cut -d';' -f1)
-    SECURITY=$(echo "$APT_CHECK_OUTPUT" | cut -d';' -f2)
-else
-    UPDATES=$(apt list --upgradable 2>/dev/null | grep -c 'upgradable' || true)
-    SECURITY=0
+# --- Package manager lock check ---
+if ! pkgmgr_lock_check; then
+    json_emit "$EXIT_PKG_LOCK"
+    exit "$EXIT_PKG_LOCK"
 fi
 
-log "Updates available: $UPDATES (security: $SECURITY)"
+# --- Count updates (system + flatpak + snap) ---
+pkgmgr_count_updates
+flatpak_count
+snap_count
 
-# --- Exit if up to date ---
-if [[ "$UPDATES" -eq 0 ]]; then
-    log "System is up to date."
-    exit 0
+# --- Mark last check ---
+schedule_mark_done
+
+# --- Update JSON data ---
+json_set "updates_total" "$PKG_UPDATES_TOTAL"
+json_set "updates_security" "$PKG_UPDATES_SECURITY"
+json_set "updates_critical" "$PKG_UPDATES_CRITICAL"
+json_set "updates_flatpak" "$PKG_UPDATES_FLATPAK"
+json_set "updates_snap" "$PKG_UPDATES_SNAP"
+
+# --- Self-update check (non-blocking) ---
+SELFUPDATE_AVAILABLE=""
+if selfupdate_check_due; then
+    SELFUPDATE_AVAILABLE=$(selfupdate_check 2>/dev/null) || true
+fi
+
+# --- Exit if no updates ---
+TOTAL_UPDATES=$((PKG_UPDATES_TOTAL + PKG_UPDATES_FLATPAK + PKG_UPDATES_SNAP))
+
+if [[ "$TOTAL_UPDATES" -eq 0 ]]; then
+    log_info "System is up to date"
+
+    # Still notify about self-update if available
+    if [[ -n "$SELFUPDATE_AVAILABLE" ]] && [[ "$DRY_RUN" != "true" ]]; then
+        notify_detect
+        notify_selfupdate "$NUDGE_VERSION" "$SELFUPDATE_AVAILABLE"
+    fi
+
+    end_time=$(date +%s)
+    json_set "duration_seconds" "$(( end_time - _NUDGE_START_TIME ))"
+    json_emit "$EXIT_OK"
+    history_write "NO_UPDATES" "" "$EXIT_OK"
+    exit "$EXIT_OK"
 fi
 
 # --- Check-only mode ---
 if [[ "$CHECK_ONLY" == "true" ]]; then
-    echo "$UPDATES updates available ($SECURITY security)"
-    exit 0
-fi
-
-# --- Detect notification backend ---
-detect_backend() {
-    if command -v kdialog &>/dev/null; then
-        echo "kdialog"
-    elif command -v zenity &>/dev/null; then
-        echo "zenity"
-    elif command -v notify-send &>/dev/null; then
-        echo "notify-send"
+    if [[ "$_JSON_FLAG" == "true" ]]; then
+        # List updates for JSON detail
+        pkgmgr_list_updates
+        json_set "packages" "$(pkgmgr_build_json_packages)"
+        end_time=$(date +%s)
+        json_set "duration_seconds" "$(( end_time - _NUDGE_START_TIME ))"
+        json_emit "$EXIT_OK"
     else
-        echo "none"
+        pkgmgr_build_summary
     fi
-}
-
-BACKEND="$NOTIFICATION_BACKEND"
-if [[ "$BACKEND" == "auto" ]]; then
-    BACKEND=$(detect_backend)
+    exit "$EXIT_OK"
 fi
 
-log "Using notification backend: $BACKEND"
+# --- Build preview if enabled ---
+PREVIEW_TEXT=""
+if [[ "${PREVIEW_UPDATES:-true}" == "true" ]]; then
+    pkgmgr_list_updates
+    PREVIEW_TEXT=$(pkgmgr_build_preview 30)
+    json_set "packages" "$(pkgmgr_build_json_packages)"
+fi
 
 # --- Build dialog message ---
-MSG="There are $UPDATES package update(s) available."
-if [[ "$CHECK_SECURITY" == "true" ]] && [[ "$SECURITY" -gt 0 ]]; then
-    MSG="$MSG\n$SECURITY of these are security updates."
+MSG="$(pkgmgr_build_summary)"
+MSG+="\n\nWould you like to update now?"
+
+if [[ -n "$SELFUPDATE_AVAILABLE" ]]; then
+    MSG+="\n\n(nudge v${SELFUPDATE_AVAILABLE} is available — run: nudge --self-update)"
 fi
-MSG="$MSG\n\nWould you like to update now?"
 
 # --- Dry run exits here ---
 if [[ "$DRY_RUN" == "true" ]]; then
-    log "Dry run — would show $BACKEND dialog."
-    echo "Backend: $BACKEND"
+    log_info "Dry run — would show dialog"
+    notify_detect
+    echo "Backend: $NOTIFY_BACKEND"
     echo "Message: $(echo -e "$MSG")"
-    exit 0
+    if [[ -n "$PREVIEW_TEXT" ]]; then
+        echo "Preview:"
+        echo "$PREVIEW_TEXT"
+    fi
+    end_time=$(date +%s)
+    json_set "duration_seconds" "$(( end_time - _NUDGE_START_TIME ))"
+    json_emit "$EXIT_OK"
+    exit "$EXIT_OK"
 fi
 
-# --- Detect terminal emulator ---
-detect_terminal() {
-    if command -v konsole &>/dev/null; then
-        echo "konsole"
-    elif command -v gnome-terminal &>/dev/null; then
-        echo "gnome-terminal"
-    elif command -v xfce4-terminal &>/dev/null; then
-        echo "xfce4-terminal"
-    elif command -v x-terminal-emulator &>/dev/null; then
-        echo "x-terminal-emulator"
-    else
-        echo "xterm"
-    fi
-}
-
-# --- Run update in terminal ---
-run_update() {
-    local term
-    term=$(detect_terminal)
-    case "$term" in
-        konsole)
-            konsole --hold -e bash -c "$UPDATE_COMMAND"
-            ;;
-        gnome-terminal)
-            gnome-terminal -- bash -c "$UPDATE_COMMAND; echo; echo 'Press Enter to close.'; read -r"
-            ;;
-        xfce4-terminal)
-            xfce4-terminal --hold -e bash -c "$UPDATE_COMMAND"
-            ;;
-        *)
-            $term -e bash -c "$UPDATE_COMMAND; echo; echo 'Press Enter to close.'; read -r"
-            ;;
-    esac
-}
+# --- Detect notification backend ---
+notify_detect
+if [[ "$NOTIFY_BACKEND" == "none" ]]; then
+    log_error "No notification backend available"
+    json_emit "$EXIT_NO_BACKEND"
+    history_write "NO_BACKEND" "" "$EXIT_NO_BACKEND"
+    exit "$EXIT_NO_BACKEND"
+fi
 
 # --- Show prompt ---
-RESPONSE=false
-case "$BACKEND" in
-    kdialog)
-        DIALOG_ARGS=(--icon system-software-update --title "System Updates Available" --yesno "$MSG")
-        if [[ "$AUTO_DISMISS" -gt 0 ]]; then
-            if kdialog "${DIALOG_ARGS[@]}" 2>/dev/null & then
-                DIALOG_PID=$!
-                sleep "$AUTO_DISMISS" 2>/dev/null || true
-                if kill -0 "$DIALOG_PID" 2>/dev/null; then
-                    kill "$DIALOG_PID" 2>/dev/null || true
-                    log "Dialog auto-dismissed after ${AUTO_DISMISS}s."
-                else
-                    if wait "$DIALOG_PID"; then
-                        RESPONSE=true
-                    fi
-                fi
-            fi
-        else
-            if kdialog "${DIALOG_ARGS[@]}" 2>/dev/null; then
-                RESPONSE=true
-            fi
-        fi
-        ;;
-    zenity)
-        if zenity --question --icon-name=system-software-update \
-                  --title="System Updates Available" \
-                  --text="$(echo -e "$MSG")" \
-                  --timeout="$( [[ "$AUTO_DISMISS" -gt 0 ]] && echo "$AUTO_DISMISS" || echo "0" )" \
-                  2>/dev/null; then
-            RESPONSE=true
-        fi
-        ;;
-    notify-send)
-        notify-send -i system-software-update "System Updates Available" \
-            "$UPDATES update(s) available. Run: nudge.sh --check-only" 2>/dev/null || true
-        log "Sent desktop notification (notify-send does not support interactive prompts)."
-        exit 0
-        ;;
-    none)
-        log "No notification backend available. Exiting."
-        exit 0
-        ;;
-esac
-
-if [[ "$RESPONSE" == "true" ]]; then
-    log "User accepted update. Running: $UPDATE_COMMAND"
-    run_update
-else
-    log "User declined update."
+if ! notify_prompt "$MSG" "$PREVIEW_TEXT"; then
+    json_emit "$EXIT_NO_BACKEND"
+    history_write "NO_BACKEND" "" "$EXIT_NO_BACKEND"
+    exit "$EXIT_NO_BACKEND"
 fi
 
-exit 0
+# --- Handle response ---
+case "$NOTIFY_RESPONSE" in
+    accepted)
+        log_info "User accepted update"
+
+        # Pre-upgrade snapshot
+        if [[ "${SNAPSHOT_ENABLED:-false}" == "true" ]]; then
+            if ! safety_snapshot; then
+                log_error "Snapshot failed — aborting upgrade"
+                json_emit "$EXIT_SNAPSHOT_FAILED"
+                history_write "SNAPSHOT_FAILED" "" "$EXIT_SNAPSHOT_FAILED"
+                exit "$EXIT_SNAPSHOT_FAILED"
+            fi
+        fi
+
+        # Run system upgrade
+        if pkgmgr_upgrade; then
+            log_info "System upgrade completed"
+
+            # Flatpak + Snap upgrades
+            flatpak_upgrade
+            snap_upgrade
+
+            # Reboot detection
+            safety_handle_reboot
+
+            end_time=$(date +%s)
+            json_set "duration_seconds" "$(( end_time - _NUDGE_START_TIME ))"
+            json_emit "$EXIT_UPDATES_APPLIED"
+            history_write "APPLIED" "" "$EXIT_UPDATES_APPLIED"
+            exit "$EXIT_UPDATES_APPLIED"
+        else
+            log_error "System upgrade failed"
+            end_time=$(date +%s)
+            json_set "duration_seconds" "$(( end_time - _NUDGE_START_TIME ))"
+            json_emit "$EXIT_UPDATES_FAILED"
+            history_write "FAILED" "Upgrade command returned non-zero" "$EXIT_UPDATES_FAILED"
+            exit "$EXIT_UPDATES_FAILED"
+        fi
+        ;;
+
+    deferred)
+        log_info "User chose to defer"
+        json_set "deferred" "true"
+
+        if ! schedule_prompt_defer; then
+            # Deferral dialog cancelled — treat as decline
+            log_info "Deferral cancelled"
+            end_time=$(date +%s)
+            json_set "duration_seconds" "$(( end_time - _NUDGE_START_TIME ))"
+            json_emit "$EXIT_UPDATES_DECLINED"
+            history_write "DECLINED" "Deferral cancelled" "$EXIT_UPDATES_DECLINED"
+            exit "$EXIT_UPDATES_DECLINED"
+        fi
+
+        end_time=$(date +%s)
+        json_set "duration_seconds" "$(( end_time - _NUDGE_START_TIME ))"
+        json_emit "$EXIT_DEFERRED"
+        history_write "DEFERRED" "" "$EXIT_DEFERRED"
+        exit "$EXIT_DEFERRED"
+        ;;
+
+    declined|*)
+        log_info "User declined update"
+        end_time=$(date +%s)
+        json_set "duration_seconds" "$(( end_time - _NUDGE_START_TIME ))"
+        json_emit "$EXIT_UPDATES_DECLINED"
+        history_write "DECLINED" "" "$EXIT_UPDATES_DECLINED"
+        exit "$EXIT_UPDATES_DECLINED"
+        ;;
+esac

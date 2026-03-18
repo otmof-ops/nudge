@@ -1,0 +1,325 @@
+.TH NUDGE 1 "March 2026" "nudge 2.0.0" "User Commands"
+.SH NAME
+nudge \- a gentle nudge to keep your system fresh
+.SH SYNOPSIS
+.B nudge
+[\fIOPTIONS\fR]
+.SH DESCRIPTION
+.B nudge
+is a lightweight login-time system update prompt for Linux desktops.
+It checks for available package updates after login and presents an
+interactive dialog asking whether you'd like to update.
+.PP
+nudge supports multiple package managers (apt, dnf, pacman, zypper),
+Flatpak and Snap integration, multiple notification backends
+(kdialog, zenity, dunstify, gdbus, notify-send), configurable
+scheduling, update deferral, pre-upgrade snapshots, and reboot
+detection.
+.SH OPTIONS
+.TP
+.B \-\-version
+Print version and exit.
+.TP
+.B \-\-help, \-h
+Show help message and exit.
+.TP
+.B \-\-dry\-run
+Run all checks but don't show dialogs or perform updates.
+Prints what would happen.
+.TP
+.B \-\-check\-only
+Print update count and exit. Does not acquire lock.
+.TP
+.B \-\-json
+Machine-readable JSON output. Suppresses all human-readable
+output and emits a single JSON object at exit.
+.TP
+.B \-\-verbose
+Enable verbose logging to stderr. Sets log level to debug.
+.TP
+.B \-\-history \fR[\fIN\fR]
+Show the last \fIN\fR history records (default: 20) in a
+formatted table.
+.TP
+.B \-\-history \-\-json
+Dump raw JSONL history records.
+.TP
+.B \-\-history \-\-since \fIDATE\fR
+Filter history records since \fIDATE\fR (ISO 8601 format).
+.TP
+.B \-\-defer \fIDURATION\fR
+Defer the next update check. Valid durations: 1h, 4h, 8h,
+1d, 3d, 1w.
+.TP
+.B \-\-self\-update
+Check GitHub for a newer version of nudge and install it.
+Verifies SHA256 checksum before installing.
+.TP
+.B \-\-config
+Print all resolved configuration values.
+.TP
+.B \-\-validate
+Validate the configuration file and exit with status.
+.TP
+.B \-\-migrate
+Run configuration migration manually.
+.SH CONFIGURATION
+Configuration is stored in \fI~/.config/nudge/nudge.conf\fR.
+All 32 keys are listed below with their types and defaults.
+.SS Core Settings
+.TP
+.B ENABLED
+(bool, default: true) Enable or disable nudge.
+.TP
+.B DELAY
+(int, default: 45) Seconds to wait after login before checking.
+.TP
+.B CHECK_SECURITY
+(bool, default: true) Highlight security updates separately.
+.TP
+.B AUTO_DISMISS
+(int, default: 0) Auto-dismiss dialog after N seconds (0 = never).
+.TP
+.B UPDATE_COMMAND
+(string, default: "sudo apt update && sudo apt full-upgrade")
+Command to run for system update.
+.SS Network Settings
+.TP
+.B NETWORK_HOST
+(string, default: archive.ubuntu.com) Host for connectivity check.
+.TP
+.B NETWORK_TIMEOUT
+(int, default: 5) Network check timeout in seconds.
+.TP
+.B NETWORK_RETRIES
+(int, default: 2) Number of retries before giving up.
+.TP
+.B OFFLINE_MODE
+(enum: skip|notify|queue, default: skip) Behavior when offline.
+.SS Notification Settings
+.TP
+.B NOTIFICATION_BACKEND
+(enum: auto|kdialog|zenity|notify-send|dunstify|gdbus|none, default: auto)
+.TP
+.B DUNST_APPNAME
+(string, default: nudge) App name for dunst notifications.
+.TP
+.B PREVIEW_UPDATES
+(bool, default: true) Show package list before prompting.
+.TP
+.B SECURITY_PRIORITY
+(bool, default: true) Show critical/security packages first.
+.SS Schedule Settings
+.TP
+.B SCHEDULE_MODE
+(enum: login|daily|weekly, default: login) Check frequency.
+.TP
+.B SCHEDULE_INTERVAL_HOURS
+(int, default: 24) Hours between checks for daily/weekly modes.
+.TP
+.B DEFERRAL_OPTIONS
+(string, default: "1h,4h,1d") Choices for "Remind me later".
+.SS Package Manager Settings
+.TP
+.B PKGMGR_OVERRIDE
+(string, default: empty) Force a specific package manager.
+.TP
+.B FLATPAK_ENABLED
+(enum: true|false|auto, default: auto) Check flatpak updates.
+.TP
+.B SNAP_ENABLED
+(enum: true|false|auto, default: auto) Check snap updates.
+.TP
+.B EXIT_ON_HELD
+(bool, default: true) Skip held/pinned packages silently.
+.SS History & Logging
+.TP
+.B HISTORY_ENABLED
+(bool, default: true) Write history records.
+.TP
+.B HISTORY_MAX_LINES
+(int, default: 500) Rotate history at this count.
+.TP
+.B LOG_FILE
+(string, default: empty) Path to log file (empty = no logging).
+.TP
+.B LOG_LEVEL
+(enum: debug|info|warn|error, default: info) Log verbosity.
+.TP
+.B JSON_OUTPUT
+(bool, default: false) Default to JSON output.
+.SS Safety Settings
+.TP
+.B REBOOT_CHECK
+(bool, default: true) Detect if reboot needed post-upgrade.
+.TP
+.B SNAPSHOT_ENABLED
+(bool, default: false) Take filesystem snapshot before upgrade.
+.TP
+.B SNAPSHOT_TOOL
+(enum: auto|timeshift|snapper|btrfs, default: auto) Snapshot backend.
+.SS Self-Update Settings
+.TP
+.B SELF_UPDATE_CHECK
+(bool, default: true) Check GitHub for newer nudge version.
+.TP
+.B SELF_UPDATE_CHANNEL
+(enum: stable|beta, default: stable) Release channel.
+.TP
+.B CONF_VERSION
+(string) Config format version. Do not edit manually.
+.SH EXIT CODES
+.TP
+.B 0
+No updates available or completed successfully.
+.TP
+.B 1
+User declined updates.
+.TP
+.B 2
+Updates applied successfully.
+.TP
+.B 3
+Update command returned non-zero.
+.TP
+.B 4
+nudge is disabled in configuration.
+.TP
+.B 5
+Network check failed after all retries.
+.TP
+.B 6
+Package manager lock held by another process.
+.TP
+.B 7
+Another nudge instance is already running.
+.TP
+.B 8
+No notification backend available.
+.TP
+.B 9
+User chose to defer updates.
+.TP
+.B 10
+Configuration validation failed fatally.
+.TP
+.B 11
+Caught SIGINT, SIGTERM, or SIGHUP.
+.TP
+.B 12
+Pre-upgrade snapshot failed, upgrade aborted.
+.TP
+.B 13
+Reboot required from previous upgrade.
+.SH FILES
+.TP
+.I ~/.config/nudge/nudge.conf
+Configuration file.
+.TP
+.I ~/.local/bin/nudge.sh
+Main script.
+.TP
+.I ~/.local/lib/nudge/
+Library modules.
+.TP
+.I ~/.local/share/nudge/history.jsonl
+JSONL history log.
+.TP
+.I ~/.local/share/nudge/last_check
+Timestamp of last update check.
+.TP
+.I ~/.local/share/nudge/deferred_until
+Deferral expiry timestamp.
+.TP
+.I ~/.config/autostart/nudge.desktop
+XDG autostart entry (if installed with XDG method).
+.TP
+.I ~/.config/systemd/user/nudge.timer
+systemd user timer (if installed with systemd method).
+.TP
+.I ~/.config/systemd/user/nudge.service
+systemd user service (if installed with systemd method).
+.SH ENVIRONMENT
+.TP
+.B XDG_CONFIG_HOME
+Overrides config directory (default: ~/.config).
+.TP
+.B XDG_DATA_HOME
+Overrides data directory (default: ~/.local/share).
+.TP
+.B XDG_RUNTIME_DIR
+Used for lock file location.
+.TP
+.B DISPLAY
+Required for GUI notification backends.
+.TP
+.B DBUS_SESSION_BUS_ADDRESS
+Required for dbus-based notifications.
+.SH EXAMPLES
+.PP
+Check for updates without showing dialogs:
+.RS
+nudge --dry-run
+.RE
+.PP
+Print update count:
+.RS
+nudge --check-only
+.RE
+.PP
+Get machine-readable output:
+.RS
+nudge --check-only --json
+.RE
+.PP
+View update history:
+.RS
+nudge --history
+.RE
+.PP
+View last 50 history entries as JSON:
+.RS
+nudge --history 50 --json
+.RE
+.PP
+Defer updates for 4 hours:
+.RS
+nudge --defer 4h
+.RE
+.PP
+Check and install nudge updates:
+.RS
+nudge --self-update
+.RE
+.PP
+Print resolved configuration:
+.RS
+nudge --config
+.RE
+.PP
+Validate configuration file:
+.RS
+nudge --validate
+.RE
+.PP
+Run config migration:
+.RS
+nudge --migrate
+.RE
+.SH SEE ALSO
+.BR apt (8),
+.BR dnf (8),
+.BR pacman (8),
+.BR zypper (8),
+.BR flatpak (1),
+.BR snap (1),
+.BR systemctl (1),
+.BR timeshift (1),
+.BR snapper (8)
+.SH BUGS
+Report bugs at https://github.com/otmof-ops/nudge/issues
+.SH AUTHORS
+OFFTRACKMEDIA Studios (ABN: 84 290 819 896)
+.SH COPYRIGHT
+Copyright (c) 2026 OFFTRACKMEDIA Studios. All rights reserved.
+Proprietary software. See EULA for terms.

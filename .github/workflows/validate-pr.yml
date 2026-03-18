@@ -16,15 +16,32 @@ jobs:
 
       - name: Run shellcheck on all shell scripts
         run: |
-          shellcheck nudge.sh install.sh uninstall.sh
+          shellcheck nudge.sh install.sh uninstall.sh lib/*.sh
 
       - name: Validate bash syntax
         run: |
           bash -n nudge.sh
           bash -n install.sh
           bash -n uninstall.sh
+          for f in lib/*.sh; do
+            bash -n "$f"
+          done
 
       - name: Validate config file format
         run: |
           # Config must be valid bash (sourceable without errors)
           bash -n nudge.conf
+
+  test:
+    name: BATS Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bats-core
+        run: |
+          sudo apt-get install -y bats
+
+      - name: Run tests
+        run: |
+          bats tests/

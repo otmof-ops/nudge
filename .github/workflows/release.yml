@@ -29,4 +29,18 @@ jobs:
             nudge.sh
             nudge.conf
             nudge.desktop
+            nudge.timer
+            nudge.service
+            nudge-completion.bash
+            nudge.1
             uninstall.sh
+            lib/output.sh
+            lib/config.sh
+            lib/lock.sh
+            lib/network.sh
+            lib/pkgmgr.sh
+            lib/notify.sh
+            lib/schedule.sh
+            lib/history.sh
+            lib/safety.sh
+            lib/selfupdate.sh

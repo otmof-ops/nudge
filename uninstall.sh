@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2088  # Tilde in display strings is intentional
 # nudge uninstaller
 # Copyright (c) 2026 OFFTRACKMEDIA Studios. All rights reserved.
+# Version: 2.0.0
 
 set -euo pipefail
 
@@ -12,25 +14,21 @@ USE_COLOR=true
 # --- Parse flags ---
 for arg in "$@"; do
     case "$arg" in
-        --yes|-y)
-            SKIP_CONFIRM=true
-            ;;
-        --keep-config)
-            KEEP_CONFIG=true
-            ;;
-        --no-color)
-            USE_COLOR=false
-            ;;
+        --yes|-y)       SKIP_CONFIRM=true ;;
+        --keep-config)  KEEP_CONFIG=true ;;
+        --no-color)     USE_COLOR=false ;;
         --help|-h)
-            echo "nudge uninstaller"
-            echo ""
-            echo "Usage: uninstall.sh [OPTIONS]"
-            echo ""
-            echo "Options:"
-            echo "  --yes, -y      Skip confirmation prompts"
-            echo "  --keep-config  Preserve configuration file"
-            echo "  --no-color     Disable colored output"
-            echo "  --help, -h     Show this help"
+            cat <<'HELP'
+nudge uninstaller
+
+Usage: uninstall.sh [OPTIONS]
+
+Options:
+  --yes, -y      Skip confirmation prompts
+  --keep-config  Preserve configuration directory
+  --no-color     Disable colored output
+  --help, -h     Show this help
+HELP
             exit 0
             ;;
     esac
@@ -44,11 +42,7 @@ if [[ "$USE_COLOR" == "true" ]] && [[ -t 1 ]]; then
     CYAN='\033[0;36m'
     RESET='\033[0m'
 else
-    BOLD=''
-    GREEN=''
-    YELLOW=''
-    CYAN=''
-    RESET=''
+    BOLD='' GREEN='' YELLOW='' CYAN='' RESET=''
 fi
 
 info()    { echo -e "${GREEN}[✓]${RESET} $1"; }
@@ -59,9 +53,19 @@ echo ""
 header "=== nudge uninstaller ==="
 echo ""
 
+# --- Disable systemd timer first ---
+if command -v systemctl &>/dev/null; then
+    if systemctl --user is-enabled nudge.timer &>/dev/null; then
+        echo "  Disabling systemd timer..."
+        systemctl --user stop nudge.timer 2>/dev/null || true
+        systemctl --user disable nudge.timer 2>/dev/null || true
+    fi
+fi
+
 # --- Show what will be removed ---
-header "The following files will be removed:"
+header "The following will be removed:"
 FILES_TO_REMOVE=()
+DIRS_TO_REMOVE=()
 
 check_file() {
     if [[ -f "$1" ]]; then
@@ -70,35 +74,53 @@ check_file() {
     fi
 }
 
-check_file "${HOME}/.local/bin/nudge.sh" "${HOME}/.local/bin/nudge.sh (main script)"
-check_file "${HOME}/.config/autostart/nudge.desktop" "${HOME}/.config/autostart/nudge.desktop (autostart entry)"
-check_file "${HOME}/.config/nudge.version" "${HOME}/.config/nudge.version (version stamp)"
-
-LOCK="/tmp/nudge-${UID}.lock"
-if [[ -f "$LOCK" ]]; then
-    echo "  $LOCK (lock file)"
-    FILES_TO_REMOVE+=("$LOCK")
-fi
-
-# --- Check for log file ---
-LOG_FILE=""
-if [[ -f "${HOME}/.config/nudge.conf" ]]; then
-    LOG_FILE=$(grep -oP '^LOG_FILE="\K[^"]*' "${HOME}/.config/nudge.conf" 2>/dev/null || true)
-    if [[ -n "$LOG_FILE" ]] && [[ -f "$LOG_FILE" ]]; then
-        echo "  $LOG_FILE (log file)"
-        FILES_TO_REMOVE+=("$LOG_FILE")
+check_dir() {
+    if [[ -d "$1" ]]; then
+        echo "  $2"
+        DIRS_TO_REMOVE+=("$1")
     fi
+}
+
+# Scripts
+check_file "${HOME}/.local/bin/nudge.sh" "~/.local/bin/nudge.sh (main script)"
+
+# Library
+check_dir "${HOME}/.local/lib/nudge" "~/.local/lib/nudge/ (library modules)"
+
+# Autostart
+check_file "${HOME}/.config/autostart/nudge.desktop" "~/.config/autostart/nudge.desktop (XDG autostart)"
+
+# systemd units
+check_file "${HOME}/.config/systemd/user/nudge.timer" "~/.config/systemd/user/nudge.timer"
+check_file "${HOME}/.config/systemd/user/nudge.service" "~/.config/systemd/user/nudge.service"
+
+# Version stamp
+check_file "${HOME}/.config/nudge.version" "~/.config/nudge.version (version stamp)"
+
+# Bash completion
+check_file "${HOME}/.local/share/bash-completion/completions/nudge" "bash completion"
+
+# Man page
+check_file "${HOME}/.local/share/man/man1/nudge.1" "man page"
+
+# Lock file
+LOCK="${XDG_RUNTIME_DIR:-/tmp}/nudge-${UID}.lock"
+check_file "$LOCK" "$LOCK (lock file)"
+
+# State/data directory
+check_dir "${HOME}/.local/share/nudge" "~/.local/share/nudge/ (history + state)"
+
+# Config handling
+if [[ "$KEEP_CONFIG" != "true" ]]; then
+    check_dir "${HOME}/.config/nudge" "~/.config/nudge/ (configuration)"
+    # Legacy config
+    check_file "${HOME}/.config/nudge.conf" "~/.config/nudge.conf (legacy config)"
+else
+    warn "Config will be preserved (--keep-config)"
 fi
 
-# --- Config handling ---
-if [[ "$KEEP_CONFIG" != "true" ]] && [[ -f "${HOME}/.config/nudge.conf" ]]; then
-    echo "  ${HOME}/.config/nudge.conf (configuration)"
-    FILES_TO_REMOVE+=("${HOME}/.config/nudge.conf")
-elif [[ -f "${HOME}/.config/nudge.conf" ]]; then
-    warn "Config will be preserved (--keep-config)."
-fi
-
-if [[ ${#FILES_TO_REMOVE[@]} -eq 0 ]]; then
+TOTAL_ITEMS=$(( ${#FILES_TO_REMOVE[@]} + ${#DIRS_TO_REMOVE[@]} ))
+if [[ "$TOTAL_ITEMS" -eq 0 ]]; then
     echo "  (no nudge files found)"
     echo ""
     echo "Nothing to uninstall."
@@ -126,19 +148,23 @@ for f in "${FILES_TO_REMOVE[@]}"; do
     fi
 done
 
-# --- Handle config separately if not --keep-config and not --yes ---
-if [[ "$KEEP_CONFIG" != "true" ]] && [[ "$SKIP_CONFIRM" != "true" ]]; then
-    # Config was already in the list, already removed
-    true
-elif [[ "$KEEP_CONFIG" != "true" ]] && [[ "$SKIP_CONFIRM" == "true" ]]; then
-    # Config was already in the list, already removed
-    true
+# --- Remove directories ---
+for d in "${DIRS_TO_REMOVE[@]}"; do
+    if [[ -d "$d" ]]; then
+        rm -rf "$d"
+        info "Removed: $d"
+    fi
+done
+
+# --- Reload systemd if units were removed ---
+if command -v systemctl &>/dev/null; then
+    systemctl --user daemon-reload 2>/dev/null || true
 fi
 
 echo ""
 info "nudge uninstalled."
 
-if [[ "$KEEP_CONFIG" == "true" ]] && [[ -f "${HOME}/.config/nudge.conf" ]]; then
-    echo "  Config preserved at: ~/.config/nudge.conf"
+if [[ "$KEEP_CONFIG" == "true" ]] && [[ -d "${HOME}/.config/nudge" ]]; then
+    echo "  Config preserved at: ~/.config/nudge/"
 fi
 echo ""
