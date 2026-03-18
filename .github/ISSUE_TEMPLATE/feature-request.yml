@@ -1,0 +1,45 @@
+name: Feature Request
+description: Suggest a new feature for nudge
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        We'd love to hear your ideas for improving nudge. Please describe the feature and your use case.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Feature Description
+      description: What feature would you like to see?
+    validations:
+      required: true
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use Case
+      description: What problem does this feature solve? How would you use it?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: desktop
+    attributes:
+      label: Desktop Environment
+      description: Which DE are you using?
+      options:
+        - KDE Plasma
+        - GNOME
+        - XFCE
+        - Multiple / All
+        - Other
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Have you considered any workarounds or alternative approaches?

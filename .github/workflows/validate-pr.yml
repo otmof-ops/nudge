@@ -1,0 +1,30 @@
+name: Validate PR
+
+on:
+  pull_request:
+    branches: [master]
+
+jobs:
+  shellcheck:
+    name: ShellCheck & Syntax Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Run shellcheck on all shell scripts
+        run: |
+          shellcheck nudge.sh install.sh uninstall.sh
+
+      - name: Validate bash syntax
+        run: |
+          bash -n nudge.sh
+          bash -n install.sh
+          bash -n uninstall.sh
+
+      - name: Validate config file format
+        run: |
+          # Config must be valid bash (sourceable without errors)
+          bash -n nudge.conf
