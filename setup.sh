@@ -175,6 +175,7 @@ _detect_all() {
     command -v snap &>/dev/null && _HAVE_SNAP=true
     command -v timeshift &>/dev/null && _HAVE_TIMESHIFT=true
     command -v snapper &>/dev/null && _HAVE_SNAPPER=true
+    return 0
 }
 
 # --- Bunny farewell art ---

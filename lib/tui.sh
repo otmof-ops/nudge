@@ -253,21 +253,12 @@ _tui_table() {
 # --- Render bunny with message (framed) ---
 _tui_bunny() {
     local msg1="${1:-}" msg2="${2:-}"
-    _tui_clear
-
-    # Calculate frame dimensions
-    local bunny_width=8  # Width of bunny art
-    local msg_len=${#msg1}
-    local msg2_len=${#msg2}
-    local content_width=$(( bunny_width + 2 + (msg_len > msg2_len ? msg_len : msg2_len) ))
-    (( content_width < 30 )) && content_width=30
-    (( content_width > _TUI_WIDTH - 8 )) && content_width=$(( _TUI_WIDTH - 8 ))
 
     echo ""
-    echo -e "    ${_TUI_SHADOW}(\\(\\${_TUI_RESET}"
+    echo -e "    ${_TUI_SHADOW}(\\(\\\\${_TUI_RESET}"
     echo -e "    ${_TUI_SHADOW}( -.-)${_TUI_RESET}  ${_TUI_BOLD}${msg1}${_TUI_RESET}"
     if [[ -n "$msg2" ]]; then
-        echo -e "    ${_TUI_SHADOW}o_(\")(\")\${_TUI_RESET}  ${_TUI_SHADOW}${msg2}${_TUI_RESET}"
+        echo -e "    ${_TUI_SHADOW}o_(\")(\")${_TUI_RESET}  ${_TUI_SHADOW}${msg2}${_TUI_RESET}"
     else
         echo -e "    ${_TUI_SHADOW}o_(\")(\")${_TUI_RESET}"
     fi
