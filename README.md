@@ -17,6 +17,18 @@
 
 Lightweight Linux desktop update manager that checks for available packages after login and asks if you'd like to update. Supports multiple distributions and package managers (apt, dnf, pacman, zypper), 5 notification backends, Flatpak and Snap stores, scheduling with deferral, pre-upgrade snapshots, and a friendly bunny mascot. Pure bash. Zero compiled dependencies. 309 tests.
 
+## Beta Testing
+
+nudge is in active development and publicly available for early adopters. If you're running a Linux desktop and want to help improve it, install it, use it, and report what breaks. Bug reports, edge cases, quirky distro behaviour, notification backends not cooperating — all of it is useful.
+
+**How to help:**
+
+1. Install nudge on your daily driver (see [Quick Start](#quick-start))
+2. Use it normally — let it run at login, try the different notification backends, test scheduling and deferral
+3. File issues at [github.com/otmof-ops/nudge/issues](https://github.com/otmof-ops/nudge/issues) with your distro, desktop environment, and what happened vs what you expected
+
+The more variety of setups it gets tested on, the faster it stabilises. Every bug report helps.
+
 ## Why nudge?
 
 Most Linux update tools are either silent and automatic, locked to one desktop environment, or require heavyweight runtimes. nudge is a lightweight system update notification tool that asks before acting — a consent-first Linux update manager built for every desktop.

@@ -176,7 +176,7 @@ teardown() {
     [[ "$output" == *"test message"* ]]
 }
 
-@test "_wt_bunny_text contains mascot art" {
+@test "_tui_info prints status line with checkmark" {
     log_debug() { :; }
     log_info()  { :; }
     log_warn()  { :; }
@@ -186,67 +186,52 @@ teardown() {
     source "$PROJECT_DIR/lib/tui.sh"
     _tui_init
 
-    run _wt_bunny_text "hello bunny" "second line"
-    [[ "$output" == *'(\__/)'* ]]
-    [[ "$output" == *"hello bunny"* ]]
-    [[ "$output" == *"second line"* ]]
-}
-
-@test "whiptail fallback: _WT_CMD detected at init" {
-    log_debug() { :; }
-    log_info()  { :; }
-    log_warn()  { :; }
-    log_error() { :; }
-    source "$PROJECT_DIR/lib/output.sh"
-    _TUI_NO_COLOR=true
-    source "$PROJECT_DIR/lib/tui.sh"
-    _tui_init
-
-    # _WT_CMD should be whiptail, dialog, or none
-    [[ "$_WT_CMD" == "whiptail" || "$_WT_CMD" == "dialog" || "$_WT_CMD" == "none" ]]
-}
-
-@test "_is_wt_mode returns false when not interactive" {
-    log_debug() { :; }
-    log_info()  { :; }
-    log_warn()  { :; }
-    log_error() { :; }
-    source "$PROJECT_DIR/lib/output.sh"
-    _TUI_NO_COLOR=true
-    source "$PROJECT_DIR/lib/tui.sh"
-    _tui_init
-
-    _TUI_INTERACTIVE=false
-    run _is_wt_mode
-    [[ "$status" -ne 0 ]]
-}
-
-@test "_tui_info prints directly when not interactive" {
-    log_debug() { :; }
-    log_info()  { :; }
-    log_warn()  { :; }
-    log_error() { :; }
-    source "$PROJECT_DIR/lib/output.sh"
-    _TUI_NO_COLOR=true
-    source "$PROJECT_DIR/lib/tui.sh"
-    _tui_init
-
-    _TUI_INTERACTIVE=false
     run _tui_info "test message"
     [[ "$output" == *"test message"* ]]
 }
 
-@test "setup.sh --install --unattended does not invoke whiptail" {
+@test "_tui_warn prints warning line" {
+    log_debug() { :; }
+    log_info()  { :; }
+    log_warn()  { :; }
+    log_error() { :; }
+    source "$PROJECT_DIR/lib/output.sh"
+    _TUI_NO_COLOR=true
+    source "$PROJECT_DIR/lib/tui.sh"
+    _tui_init
+
+    run _tui_warn "warning message"
+    [[ "$output" == *"warning message"* ]]
+}
+
+@test "_tui_error prints error line" {
+    log_debug() { :; }
+    log_info()  { :; }
+    log_warn()  { :; }
+    log_error() { :; }
+    source "$PROJECT_DIR/lib/output.sh"
+    _TUI_NO_COLOR=true
+    source "$PROJECT_DIR/lib/tui.sh"
+    _tui_init
+
+    run _tui_error "error message"
+    [[ "$output" == *"error message"* ]]
+}
+
+@test "tui.sh has no whiptail or dialog references" {
+    run grep -c 'whiptail\|_WT_\|_wt_\|_is_wt_mode\|dialog' "$PROJECT_DIR/lib/tui.sh"
+    [[ "$output" == "0" ]]
+}
+
+@test "setup.sh --install --unattended completes without interactive prompts" {
     run "$SETUP" --install --unattended --prefix="$TMPDIR_TEST"
     [[ "$status" -eq 0 ]]
-    # Unattended mode should complete without interactive dialogs
     [[ "$output" == *"installed"* ]] || [[ "$output" == *"Installed"* ]]
 }
 
-@test "setup.sh --uninstall --yes does not invoke whiptail" {
+@test "setup.sh --uninstall --yes completes without interactive prompts" {
     "$SETUP" --install --unattended --prefix="$TMPDIR_TEST"
     run "$SETUP" --uninstall --yes --prefix="$TMPDIR_TEST"
     [[ "$status" -eq 0 ]]
-    # Should complete without interactive dialogs
     [[ ! -f "$TMPDIR_TEST/.local/bin/nudge.sh" ]]
 }

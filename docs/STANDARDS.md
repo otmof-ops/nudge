@@ -322,8 +322,6 @@ All external commands used by nudge must be documented:
 | `notify-send` | No | `lib/notify.sh` | Other backends |
 | `timeshift` | No | `lib/safety.sh` | `snapper`, `btrfs` |
 | `snapper` | No | `lib/safety.sh` | `timeshift`, `btrfs` |
-| `whiptail` | No | `setup.sh` (TUI) | `dialog`, then numbered-list fallback |
-| `dialog` | No | `setup.sh` (TUI) | `whiptail`, then numbered-list fallback |
 | `shellcheck` | Dev only | CI/lint | Required for contribution |
 | `bats` | Dev only | `make test` | Required for contribution |
 
