@@ -599,8 +599,20 @@ _action_update() {
 # ========================================================
 
 _screen_main_menu() {
+    _tui_clear
+    _tui_draw_header "NUDGE" "a gentle nudge to keep your system fresh  ·  v${VERSION}"
     _tui_bunny "hey! i'm nudge." "what would you like to do?"
-    _tui_menu "Install nudge" "Configure settings" "Check status" "Update nudge" "Uninstall" "Exit"
+    _tui_menu_header "MAIN MENU"
+    _tui_menu_section "Setup"
+    _tui_menu_item 1 "Install nudge" "fresh install"
+    _tui_menu_item 2 "Configure settings" "tweak options"
+    _tui_menu_item 3 "Check status" "verify install"
+    echo ""
+    _tui_menu_section "Maintenance"
+    _tui_menu_item 4 "Update nudge" "check for new version"
+    _tui_menu_item 5 "Uninstall" "remove nudge"
+    _tui_menu_footer "Exit"
+    _tui_prompt_choice 5
     case "${_MENU_CHOICE}" in
         1) _STATE="INSTALL_DETECT" ;;
         2) _STATE="CONFIGURE" ;;
@@ -616,14 +628,18 @@ _screen_install_detect() {
     _init_config_defaults
 
     _tui_bunny "detecting your system..." ""
-    _tui_info "Desktop: ${_DETECTED_DE}"
-    _tui_info "Notification: ${_DETECTED_BACKEND}"
-    _tui_info "Terminal: ${_DETECTED_TERMINAL}"
-    _tui_info "Package manager: ${_DETECTED_PKG}"
+    _tui_operation_header "System Detection"
+    echo ""
+    _tui_table \
+        "Desktop" "${_DETECTED_DE}" \
+        "Notification" "${_DETECTED_BACKEND}" \
+        "Terminal" "${_DETECTED_TERMINAL}" \
+        "Package manager" "${_DETECTED_PKG}"
     [[ "$_HAVE_FLATPAK" == "true" ]] && _tui_info "Flatpak: detected"
     [[ "$_HAVE_SNAP" == "true" ]] && _tui_info "Snap: detected"
 
     if [[ "$_DETECTED_BACKEND" == "none" ]]; then
+        echo ""
         _tui_error "No notification backend found."
         _tui_info "Install one of: kdialog, zenity, dunst, or libnotify-bin"
         _tui_wait
@@ -636,6 +652,7 @@ _screen_install_detect() {
         existing_version=$(cat "${_PREFIX}/.config/nudge.version" 2>/dev/null || true)
     fi
     if [[ -n "$existing_version" ]]; then
+        echo ""
         _tui_warn "nudge v${existing_version} is already installed."
     fi
 
@@ -649,7 +666,11 @@ _screen_install_detect() {
     fi
 
     echo ""
-    _tui_menu "Install now (smart defaults)" "Customize first" "Back"
+    _tui_menu_header "INSTALL OPTIONS"
+    _tui_menu_item 1 "Install now" "smart defaults"
+    _tui_menu_item 2 "Customize first" "configure before install"
+    _tui_menu_footer "Back"
+    _tui_prompt_choice 2
     case "${_MENU_CHOICE}" in
         1)
             if [[ -n "$existing_version" ]]; then
@@ -672,15 +693,36 @@ _screen_install_detect() {
 
 _screen_install_exec() {
     _tui_bunny "installing nudge v${VERSION}..." ""
+    _tui_operation_header "Installing nudge v${VERSION}"
+    echo ""
 
+    local steps=9 step=0
+
+    step=$((step + 1)); _tui_progress "$step" "$steps" "Directories"
     _action_create_dirs
+
+    step=$((step + 1)); _tui_progress "$step" "$steps" "Backup"
     _action_backup_config
+
+    step=$((step + 1)); _tui_progress "$step" "$steps" "Config"
     _action_write_config
+
+    step=$((step + 1)); _tui_progress "$step" "$steps" "Scripts"
     _action_install_scripts
+
+    step=$((step + 1)); _tui_progress "$step" "$steps" "Autostart"
     _action_install_autostart
+
+    step=$((step + 1)); _tui_progress "$step" "$steps" "Completion"
     _action_install_completion
+
+    step=$((step + 1)); _tui_progress "$step" "$steps" "Man page"
     _action_install_man
+
+    step=$((step + 1)); _tui_progress "$step" "$steps" "Version"
     _action_stamp_version
+
+    step=$((step + 1)); _tui_progress "$step" "$steps" "Verify"
     _action_verify
 
     _STATE="INSTALL_DONE"
@@ -695,10 +737,13 @@ _screen_install_done() {
         _tui_info "all done! nudge is installed."
         _tui_info "run nudge.sh --dry-run to test."
     fi
-    _tui_setting "Version" "$VERSION"
-    _tui_setting "Autostart" "${_AUTOSTART_METHOD}"
-    _tui_setting "Backend" "${_DETECTED_BACKEND}"
-    _tui_setting "Package mgr" "${_DETECTED_PKG}"
+    echo ""
+    _tui_header "Install Summary"
+    _tui_table \
+        "Version" "$VERSION" \
+        "Autostart" "${_AUTOSTART_METHOD}" \
+        "Backend" "${_DETECTED_BACKEND}" \
+        "Package mgr" "${_DETECTED_PKG}"
     _tui_wait
     _STATE="MAIN_MENU"
 }
@@ -706,13 +751,13 @@ _screen_install_done() {
 _screen_uninstall() {
     local personality="${CFG_BUNNY_PERSONALITY:-disney}"
 
-    local files=""
-    [[ -f "${_PREFIX}/.local/bin/nudge.sh" ]] && files+=$'\n'"  ~/.local/bin/nudge.sh"
-    [[ -f "${_PREFIX}/.local/bin/nudge-setup.sh" ]] && files+=$'\n'"  ~/.local/bin/nudge-setup.sh"
-    [[ -d "${_PREFIX}/.local/lib/nudge" ]] && files+=$'\n'"  ~/.local/lib/nudge/"
-    [[ -f "${_PREFIX}/.config/autostart/nudge.desktop" ]] && files+=$'\n'"  ~/.config/autostart/nudge.desktop"
-    [[ -d "${_PREFIX}/.local/share/nudge" ]] && files+=$'\n'"  ~/.local/share/nudge/"
-    [[ -d "${_PREFIX}/.config/nudge" ]] && files+=$'\n'"  ~/.config/nudge/"
+    local file_list=()
+    [[ -f "${_PREFIX}/.local/bin/nudge.sh" ]] && file_list+=("~/.local/bin/nudge.sh")
+    [[ -f "${_PREFIX}/.local/bin/nudge-setup.sh" ]] && file_list+=("~/.local/bin/nudge-setup.sh")
+    [[ -d "${_PREFIX}/.local/lib/nudge" ]] && file_list+=("~/.local/lib/nudge/")
+    [[ -f "${_PREFIX}/.config/autostart/nudge.desktop" ]] && file_list+=("~/.config/autostart/nudge.desktop")
+    [[ -d "${_PREFIX}/.local/share/nudge" ]] && file_list+=("~/.local/share/nudge/")
+    [[ -d "${_PREFIX}/.config/nudge" ]] && file_list+=("~/.config/nudge/")
 
     if [[ "$personality" == "classic" ]]; then
         _tui_bunny "Uninstall nudge" ""
@@ -720,10 +765,12 @@ _screen_uninstall() {
         _tui_bunny "you... you're removing me?" ""
     fi
 
-    echo " Files to remove:${files}"
-    echo ""
+    _tui_warning_box "Uninstall" "The following files will be removed:" "${file_list[@]}"
 
-    _tui_menu "Uninstall now" "Uninstall (keep config)" "Back"
+    _tui_menu_item 1 "Uninstall now" "remove everything"
+    _tui_menu_item 2 "Uninstall (keep config)" "preserve settings"
+    _tui_menu_footer "Back"
+    _tui_prompt_choice 2
     case "${_MENU_CHOICE}" in
         1) _KEEP_CONFIG=false; _STATE="UNINSTALL_EXEC" ;;
         2) _KEEP_CONFIG=true; _STATE="UNINSTALL_EXEC" ;;
@@ -741,13 +788,15 @@ _screen_uninstall_exec() {
         sleep 1
     fi
 
+    _tui_operation_header "Removing nudge"
+    echo ""
     _action_uninstall
 
     if [[ "$personality" != "classic" ]]; then
         echo ""
         _bunny_farewell "(T.'T)" "okay... bye bye fren. stay safe out there."
         echo ""
-        echo " *waves tiny paw*"
+        echo "    *waves tiny paw*"
     fi
 
     echo ""
@@ -766,7 +815,9 @@ _screen_uninstall_exec() {
     if _is_nudge_source_dir "$SCRIPT_DIR"; then
         echo ""
         _tui_info "Source directory still exists: ${SCRIPT_DIR}/"
-        _tui_menu "Delete it too (rm -rf ${SCRIPT_DIR}/)" "Keep it"
+        _tui_menu_item 1 "Delete it too" "rm -rf ${SCRIPT_DIR}/"
+        _tui_menu_footer "Keep it"
+        _tui_prompt_choice 1
         case "${_MENU_CHOICE}" in
             1)
                 local confirmed
@@ -795,14 +846,26 @@ _screen_configure() {
 
     _load_existing_config 2>/dev/null || true
 
+    local _cat_descriptions=(
+        "enable/disable, delay, security checks"
+        "backend, preview, bunny personality"
+        "host, timeout, retries, offline mode"
+        "login/timer, interval, deferral"
+        "package manager overrides"
+        "reboot check, snapshots"
+        "auto-update, channel"
+        "history, log file, verbosity"
+    )
+
     while true; do
         _tui_bunny "configure nudge" "pick a category"
-        local items=()
+        _tui_menu_header "CONFIGURATION"
+        local i
         for i in "${!_CATEGORY_NAMES[@]}"; do
-            items+=("${_CATEGORY_LABELS[$i]}")
+            _tui_menu_item "$(( i + 1 ))" "${_CATEGORY_LABELS[$i]}" "${_cat_descriptions[$i]}"
         done
-        items+=("Save & back")
-        _tui_menu "${items[@]}"
+        _tui_menu_footer "Save & back"
+        _tui_prompt_choice "${#_CATEGORY_NAMES[@]}"
 
         if [[ "$_MENU_CHOICE" == "0" ]]; then
             _STATE="$return_state"
@@ -817,6 +880,7 @@ _screen_configure() {
             local editing=true
             while [[ "$editing" == "true" ]]; do
                 _tui_bunny "${_CATEGORY_LABELS[$idx]}" "pick a setting to change"
+                _tui_menu_header "${_CATEGORY_LABELS[$idx]^^}"
                 local i=1
                 for key in "${keys[@]}"; do
                     local var="CFG_${key}"
@@ -829,13 +893,12 @@ _screen_configure() {
                         enum:*) type_label="${type#enum:}" ;;
                         *)    type_label="text" ;;
                     esac
-                    echo -e " ${_TUI_CYAN}${i})${_TUI_RESET} ${key} = ${_TUI_BOLD}${val}${_TUI_RESET}  (${type_label})"
+                    local desc="${key} = ${val}  (${type_label})"
+                    _tui_menu_item "$i" "$key" "${val}  (${type_label})"
                     i=$((i + 1))
                 done
-                echo -e " ${_TUI_CYAN}0)${_TUI_RESET} Back"
-                echo ""
-                read -rp " > " _MENU_CHOICE </dev/tty 2>/dev/null || read -rp " > " _MENU_CHOICE
-                _MENU_CHOICE="${_MENU_CHOICE:-0}"
+                _tui_menu_footer "Back"
+                _tui_prompt_choice "${#keys[@]}"
 
                 if [[ "$_MENU_CHOICE" == "0" ]]; then
                     editing=false
@@ -858,6 +921,8 @@ _screen_configure() {
 
 _screen_update() {
     _tui_bunny "checking for updates..." ""
+    _tui_operation_header "Update Check"
+    echo ""
 
     local latest=""
     local _orig_check="${SELF_UPDATE_CHECK:-true}"
@@ -872,11 +937,15 @@ _screen_update() {
 
     if [[ -z "$latest" ]]; then
         _tui_bunny "you're up to date!" "running nudge v${VERSION}"
-        _tui_info "auto-update: $([ "${CFG_SELF_UPDATE_CHECK:-true}" == "true" ] && echo "on" || echo "off")"
-        _tui_info "channel: ${CFG_SELF_UPDATE_CHANNEL:-stable}"
-        _tui_info "source: github.com/${SELFUPDATE_REPO}"
+        _tui_table \
+            "Auto-update" "$([ "${CFG_SELF_UPDATE_CHECK:-true}" == "true" ] && echo "on" || echo "off")" \
+            "Channel" "${CFG_SELF_UPDATE_CHANNEL:-stable}" \
+            "Source" "github.com/${SELFUPDATE_REPO}"
         echo ""
-        _tui_menu "Toggle auto-update" "Switch channel (stable/beta)" "Back"
+        _tui_menu_item 1 "Toggle auto-update" "turn on/off"
+        _tui_menu_item 2 "Switch channel" "stable/beta"
+        _tui_menu_footer "Back"
+        _tui_prompt_choice 2
         case "${_MENU_CHOICE}" in
             1)
                 if [[ "${CFG_SELF_UPDATE_CHECK:-true}" == "true" ]]; then
@@ -903,10 +972,15 @@ _screen_update() {
         esac
     else
         _tui_bunny "nudge v${latest} is available!" "you're on v${VERSION}"
-        _tui_menu "Update now" "Skip" "Back"
+        _tui_menu_item 1 "Update now" "install v${latest}"
+        _tui_menu_item 2 "Skip" "stay on v${VERSION}"
+        _tui_menu_footer "Back"
+        _tui_prompt_choice 2
         case "${_MENU_CHOICE}" in
             1)
                 _tui_bunny "updating to v${latest}..." ""
+                _tui_operation_header "Updating to v${latest}"
+                echo ""
                 if _action_update; then
                     _tui_info "Updated to v${latest}!"
                     _tui_info "Restart setup.sh to use the new version."
@@ -922,6 +996,8 @@ _screen_update() {
 
 _screen_status() {
     _tui_bunny "system status" ""
+    _tui_operation_header "System Status"
+    echo ""
 
     local installed_ver=""
     if [[ -f "${_PREFIX}/.config/nudge.version" ]]; then
@@ -935,28 +1011,41 @@ _screen_status() {
     fi
 
     _tui_info "Setup version: $VERSION"
+    echo ""
 
+    _tui_header "Components"
+    local autostart_status="not configured"
     if [[ -f "${_PREFIX}/.config/autostart/nudge.desktop" ]]; then
-        _tui_info "Autostart: XDG desktop entry"
+        autostart_status="XDG desktop entry"
     elif systemctl --user is-enabled nudge.timer &>/dev/null 2>&1; then
-        _tui_info "Autostart: systemd timer (enabled)"
-    else
-        _tui_warn "Autostart: not configured"
+        autostart_status="systemd timer (enabled)"
     fi
 
-    if [[ -f "${_PREFIX}/.local/bin/nudge.sh" ]]; then _tui_info "nudge.sh: present"; else _tui_warn "nudge.sh: missing"; fi
-    if [[ -d "${_PREFIX}/.local/lib/nudge" ]]; then _tui_info "lib modules: present"; else _tui_warn "lib modules: missing"; fi
-    if [[ -f "${_PREFIX}/.config/nudge/nudge.conf" ]]; then _tui_info "Config: present"; else _tui_warn "Config: missing"; fi
-    if [[ -f "${_PREFIX}/.local/share/bash-completion/completions/nudge" ]]; then _tui_info "Bash completion: present"; else _tui_warn "Bash completion: missing"; fi
-    if [[ -f "${_PREFIX}/.local/share/man/man1/nudge.1" ]]; then _tui_info "Man page: present"; else _tui_warn "Man page: missing"; fi
+    local nudge_sh_status="missing" lib_status="missing" config_status="missing"
+    local comp_status="missing" man_status="missing"
+    [[ -f "${_PREFIX}/.local/bin/nudge.sh" ]] && nudge_sh_status="present"
+    [[ -d "${_PREFIX}/.local/lib/nudge" ]] && lib_status="present"
+    [[ -f "${_PREFIX}/.config/nudge/nudge.conf" ]] && config_status="present"
+    [[ -f "${_PREFIX}/.local/share/bash-completion/completions/nudge" ]] && comp_status="present"
+    [[ -f "${_PREFIX}/.local/share/man/man1/nudge.1" ]] && man_status="present"
+
+    _tui_table \
+        "Autostart" "$autostart_status" \
+        "nudge.sh" "$nudge_sh_status" \
+        "lib modules" "$lib_status" \
+        "Config" "$config_status" \
+        "Bash completion" "$comp_status" \
+        "Man page" "$man_status"
 
     if _load_existing_config 2>/dev/null; then
-        _tui_header "Config highlights:"
-        _tui_setting "ENABLED" "${CFG_ENABLED}"
-        _tui_setting "SCHEDULE_MODE" "${CFG_SCHEDULE_MODE}"
-        _tui_setting "DELAY" "${CFG_DELAY}s"
-        _tui_setting "AUTO_UPDATE" "${CFG_SELF_UPDATE_CHECK}"
-        _tui_setting "CHANNEL" "${CFG_SELF_UPDATE_CHANNEL}"
+        echo ""
+        _tui_header "Config Highlights"
+        _tui_table \
+            "ENABLED" "${CFG_ENABLED}" \
+            "SCHEDULE_MODE" "${CFG_SCHEDULE_MODE}" \
+            "DELAY" "${CFG_DELAY}s" \
+            "AUTO_UPDATE" "${CFG_SELF_UPDATE_CHECK}" \
+            "CHANNEL" "${CFG_SELF_UPDATE_CHANNEL}"
     fi
 
     _tui_wait
