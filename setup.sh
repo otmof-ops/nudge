@@ -46,6 +46,7 @@ _PREFIX="${HOME}"
 _AUTOSTART_METHOD="auto"
 _IS_REINSTALL=false
 _CONFIGURE_RETURN="MAIN_MENU"
+_RUN_AFTER_INSTALL=false
 _STATE="MAIN_MENU"
 
 # --- Exit codes ---
@@ -599,26 +600,35 @@ _action_update() {
 # ========================================================
 
 _screen_main_menu() {
+    # Ensure detection + defaults are always available
+    if [[ -z "${_DETECTED_PKG:-}" ]]; then
+        _detect_all
+        _init_config_defaults
+        _load_existing_config 2>/dev/null || true
+    fi
+
     _tui_clear
     _tui_draw_header "NUDGE" "a gentle nudge to keep your system fresh  ·  v${VERSION}"
     _tui_bunny "hey! i'm nudge." "what would you like to do?"
     _tui_menu_header "MAIN MENU"
     _tui_menu_section "Setup"
-    _tui_menu_item 1 "Install nudge" "fresh install"
-    _tui_menu_item 2 "Configure settings" "tweak options"
-    _tui_menu_item 3 "Check status" "verify install"
+    _tui_menu_item 1 "Install nudge" "detect, configure & install"
+    _tui_menu_item 2 "Configure settings" "tweak all options"
+    _tui_menu_item 3 "Install options" "prefix, autostart method"
+    _tui_menu_item 4 "Check status" "verify install"
     echo ""
     _tui_menu_section "Maintenance"
-    _tui_menu_item 4 "Update nudge" "check for new version"
-    _tui_menu_item 5 "Uninstall" "remove nudge"
+    _tui_menu_item 5 "Update nudge" "check for new version"
+    _tui_menu_item 6 "Uninstall" "remove nudge"
     _tui_menu_footer "Exit"
-    _tui_prompt_choice 5
+    _tui_prompt_choice 6
     case "${_MENU_CHOICE}" in
         1) _STATE="INSTALL_DETECT" ;;
         2) _STATE="CONFIGURE" ;;
-        3) _STATE="STATUS" ;;
-        4) _STATE="UPDATE_CHECK" ;;
-        5) _STATE="UNINSTALL" ;;
+        3) _STATE="INSTALL_OPTIONS" ;;
+        4) _STATE="STATUS" ;;
+        5) _STATE="UPDATE_CHECK" ;;
+        6) _STATE="UNINSTALL" ;;
         *) _STATE="EXIT" ;;
     esac
 }
@@ -666,11 +676,13 @@ _screen_install_detect() {
     fi
 
     echo ""
-    _tui_menu_header "INSTALL OPTIONS"
-    _tui_menu_item 1 "Install now" "smart defaults"
-    _tui_menu_item 2 "Customize first" "configure before install"
+    _tui_menu_header "WHAT NEXT?"
+    _tui_menu_item 1 "Install now" "smart defaults, go!"
+    _tui_menu_item 2 "Configure first" "tweak settings before install"
+    _tui_menu_item 3 "Install options" "prefix, autostart method"
+    _tui_menu_item 4 "Install & run" "install then dry-run test"
     _tui_menu_footer "Back"
-    _tui_prompt_choice 2
+    _tui_prompt_choice 4
     case "${_MENU_CHOICE}" in
         1)
             if [[ -n "$existing_version" ]]; then
@@ -687,7 +699,69 @@ _screen_install_detect() {
             _CONFIGURE_RETURN="INSTALL_EXEC"
             _STATE="CONFIGURE"
             ;;
+        3)
+            if [[ -n "$existing_version" ]]; then
+                _UPGRADE=true
+                _load_existing_config || true
+            fi
+            _STATE="INSTALL_OPTIONS"
+            ;;
+        4)
+            if [[ -n "$existing_version" ]]; then
+                _UPGRADE=true
+                _load_existing_config || true
+            fi
+            _STATE="INSTALL_EXEC_RUN"
+            ;;
         *) _STATE="MAIN_MENU" ;;
+    esac
+}
+
+_screen_install_options() {
+    _tui_bunny "install options" "configure how nudge gets installed"
+    _tui_menu_header "INSTALL OPTIONS"
+
+    echo ""
+    _tui_header "Current Settings"
+    _tui_table \
+        "Install prefix" "${_PREFIX}" \
+        "Autostart method" "${_AUTOSTART_METHOD}"
+    echo ""
+
+    _tui_menu_item 1 "Set install prefix" "currently: ${_PREFIX}"
+    _tui_menu_item 2 "Autostart method" "currently: ${_AUTOSTART_METHOD}"
+    _tui_menu_footer "Back"
+    _tui_prompt_choice 2
+    case "${_MENU_CHOICE}" in
+        1)
+            local new_prefix
+            new_prefix=$(_tui_input "Install prefix" "$_PREFIX")
+            if [[ -d "$new_prefix" ]]; then
+                _PREFIX="$new_prefix"
+                _tui_info "Prefix set to: ${_PREFIX}"
+            else
+                _tui_warn "Directory does not exist: ${new_prefix}"
+                local create
+                create=$(_tui_confirm "Create it?" "true")
+                if [[ "$create" == "true" ]]; then
+                    mkdir -p "$new_prefix" 2>/dev/null && _PREFIX="$new_prefix" && _tui_info "Created and set: ${_PREFIX}" \
+                        || _tui_error "Failed to create directory"
+                fi
+            fi
+            _tui_wait
+            _STATE="INSTALL_OPTIONS"
+            ;;
+        2)
+            local method
+            method=$(_tui_choice "Autostart method:" "$_AUTOSTART_METHOD" "auto" "xdg" "systemd")
+            _AUTOSTART_METHOD="$method"
+            _tui_info "Autostart method set to: ${_AUTOSTART_METHOD}"
+            _tui_wait
+            _STATE="INSTALL_OPTIONS"
+            ;;
+        *)
+            _STATE="MAIN_MENU"
+            ;;
     esac
 }
 
@@ -744,6 +818,21 @@ _screen_install_done() {
         "Autostart" "${_AUTOSTART_METHOD}" \
         "Backend" "${_DETECTED_BACKEND}" \
         "Package mgr" "${_DETECTED_PKG}"
+
+    if [[ "${_RUN_AFTER_INSTALL:-false}" == "true" ]]; then
+        _RUN_AFTER_INSTALL=false
+        echo ""
+        _tui_operation_header "Running nudge --dry-run"
+        echo ""
+        if [[ -x "${_PREFIX}/.local/bin/nudge.sh" ]]; then
+            "${_PREFIX}/.local/bin/nudge.sh" --dry-run 2>&1 | while IFS= read -r line; do
+                echo "    $line"
+            done
+        else
+            _tui_error "nudge.sh not found at ${_PREFIX}/.local/bin/nudge.sh"
+        fi
+    fi
+
     _tui_wait
     _STATE="MAIN_MENU"
 }
@@ -844,6 +933,11 @@ _screen_configure() {
     local return_state="${_CONFIGURE_RETURN}"
     _CONFIGURE_RETURN="MAIN_MENU"
 
+    # Ensure defaults are initialized even if entering configure directly
+    if [[ -z "${_DETECTED_PKG:-}" ]]; then
+        _detect_all
+        _init_config_defaults
+    fi
     _load_existing_config 2>/dev/null || true
 
     local _cat_descriptions=(
@@ -1204,7 +1298,9 @@ main() {
         case "$_STATE" in
             MAIN_MENU)       _screen_main_menu ;;
             INSTALL_DETECT)  _screen_install_detect ;;
+            INSTALL_OPTIONS) _screen_install_options ;;
             INSTALL_EXEC)    _screen_install_exec ;;
+            INSTALL_EXEC_RUN) _RUN_AFTER_INSTALL=true; _screen_install_exec ;;
             INSTALL_DONE)    _screen_install_done ;;
             UNINSTALL)       _screen_uninstall ;;
             UNINSTALL_EXEC)  _screen_uninstall_exec ;;
