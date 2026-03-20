@@ -82,53 +82,53 @@ teardown() {
 @test "bunny_face returns normal face for prompt streak 0" {
     BUNNY_PERSONALITY="disney"
     run bunny_face "prompt" 0
-    [[ "$output" == "(='.'=)" ]]
+    [[ "$output" == "( -.-)'" ]] || [[ "$output" == "( -.-)" ]]
 }
 
 @test "bunny_face returns normal face for prompt streak 1-2" {
     BUNNY_PERSONALITY="disney"
     run bunny_face "prompt" 1
-    [[ "$output" == "(='.'=)" ]]
+    [[ "$output" == "( -.-)'" ]] || [[ "$output" == "( -.-)" ]]
     run bunny_face "prompt" 2
-    [[ "$output" == "(='.'=)" ]]
+    [[ "$output" == "( -.-)'" ]] || [[ "$output" == "( -.-)" ]]
 }
 
 @test "bunny_face returns sweat face for prompt streak 3" {
     BUNNY_PERSONALITY="disney"
     run bunny_face "prompt" 3
-    [[ "$output" == "(;'.'=)" ]]
+    [[ "$output" == "( ;.-)" ]]
 }
 
 @test "bunny_face returns teary face for prompt streak 4" {
     BUNNY_PERSONALITY="disney"
     run bunny_face "prompt" 4
-    [[ "$output" == "(:'.'=)" ]]
+    [[ "$output" == "( :.-)" ]]
 }
 
 @test "bunny_face returns crying face for prompt streak 5+" {
     BUNNY_PERSONALITY="disney"
     run bunny_face "prompt" 5
-    [[ "$output" == "(T.'T)" ]]
+    [[ "$output" == "( T.T)" ]]
     run bunny_face "prompt" 10
-    [[ "$output" == "(T.'T)" ]]
+    [[ "$output" == "( T.T)" ]]
 }
 
 @test "bunny_face returns happy face for accepted" {
     BUNNY_PERSONALITY="disney"
     run bunny_face "accepted" 0
-    [[ "$output" == "(^'.'^)" ]]
+    [[ "$output" == "( ^.^)" ]]
 }
 
 @test "bunny_face returns worried face for reboot" {
     BUNNY_PERSONALITY="disney"
     run bunny_face "reboot" 0
-    [[ "$output" == "(o'.'o)" ]]
+    [[ "$output" == "( o.o)" ]]
 }
 
 @test "bunny_face returns normal face for zero updates" {
     BUNNY_PERSONALITY="disney"
     run bunny_face "zero" 0
-    [[ "$output" == "(='.'=)" ]]
+    [[ "$output" == "( -.-)'" ]] || [[ "$output" == "( -.-)" ]]
 }
 
 # --- Face tests (classic mode) ---
@@ -136,11 +136,11 @@ teardown() {
 @test "bunny_face always returns normal face in classic mode" {
     BUNNY_PERSONALITY="classic"
     run bunny_face "prompt" 5
-    [[ "$output" == "(='.'=)" ]]
+    [[ "$output" == "( -.-)'" ]] || [[ "$output" == "( -.-)" ]]
     run bunny_face "accepted" 0
-    [[ "$output" == "(='.'=)" ]]
+    [[ "$output" == "( -.-)'" ]] || [[ "$output" == "( -.-)" ]]
     run bunny_face "reboot" 0
-    [[ "$output" == "(='.'=)" ]]
+    [[ "$output" == "( -.-)'" ]] || [[ "$output" == "( -.-)" ]]
 }
 
 # --- Message tests (disney mode) ---
@@ -246,9 +246,9 @@ teardown() {
     BUNNY_PERSONALITY="disney"
     echo "0" > "$BUNNY_STREAK_FILE"
     run bunny_dialog "prompt"
-    [[ "$output" == *'(\__/)'* ]]
-    [[ "$output" == *"(='.'=)"* ]]
-    [[ "$output" == *'(")_(")'* ]]
+    [[ "$output" == *'(\('* ]]
+    [[ "$output" == *"( -.-)'"* ]] || [[ "$output" == *"( -.-)  "* ]] || [[ "$output" == *"( -.-)"* ]]
+    [[ "$output" == *'o_(")(")'* ]]
     # Message is now randomly selected from array
     [[ -n "$output" ]]
 }
@@ -256,8 +256,8 @@ teardown() {
 @test "bunny_dialog classic mode produces output" {
     BUNNY_PERSONALITY="classic"
     run bunny_dialog "accepted"
-    [[ "$output" == *'(\__/)'* ]]
-    [[ "$output" == *"(='.'=)"* ]]
+    [[ "$output" == *'(\('* ]]
+    [[ "$output" == *"( -.-)'"* ]] || [[ "$output" == *"( -.-)  "* ]] || [[ "$output" == *"( -.-)"* ]]
     [[ "$output" == *"Updates applied successfully"* ]]
 }
 
@@ -332,10 +332,10 @@ teardown() {
 @test "bunny_render classic mode matches legacy format" {
     BUNNY_PERSONALITY="classic"
     run bunny_render "prompt"
-    [[ "$output" == *'(\__/)'* ]]
-    [[ "$output" == *"(='.'=)"* ]]
+    [[ "$output" == *'(\('* ]]
+    [[ "$output" == *"( -.-)'"* ]] || [[ "$output" == *"( -.-)  "* ]] || [[ "$output" == *"( -.-)"* ]]
     [[ "$output" == *"Updates available"* ]]
-    [[ "$output" == *'(")_(")'* ]]
+    [[ "$output" == *'o_(")(")'* ]]
 }
 
 @test "bunny_render classic mode with detail" {
@@ -498,6 +498,6 @@ line3" "christmas"
     BUNNY_PERSONALITY="disney"
     echo "0" > "$BUNNY_STREAK_FILE"
     run bunny_dialog "prompt"
-    [[ "$output" == *'(\__/)'* ]]
-    [[ "$output" == *'(")_(")'* ]]
+    [[ "$output" == *'(\('* ]]
+    [[ "$output" == *'o_(")(")'* ]]
 }

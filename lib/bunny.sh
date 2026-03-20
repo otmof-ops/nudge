@@ -8,16 +8,16 @@ set -euo pipefail
 BUNNY_STREAK_FILE="${NUDGE_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/nudge}/decline_streak"
 
 # --- Face constants ---
-readonly BUNNY_FACE_NORMAL="(='.'=)"
-readonly BUNNY_FACE_HAPPY="(^'.'^)"
-readonly BUNNY_FACE_WORRIED="(o'.'o)"
-readonly BUNNY_FACE_SWEAT="(;'.'=)"
-readonly BUNNY_FACE_TEARY="(:'.'=)"
-readonly BUNNY_FACE_CRYING="(T.'T)"
+readonly BUNNY_FACE_NORMAL="( -.-)"
+readonly BUNNY_FACE_HAPPY="( ^.^)"
+readonly BUNNY_FACE_WORRIED="( o.o)"
+readonly BUNNY_FACE_SWEAT="( ;.-)"
+readonly BUNNY_FACE_TEARY="( :.-)"
+readonly BUNNY_FACE_CRYING="( T.T)"
 # shellcheck disable=SC2034  # Face constants are used by bunny-poses.sh and sourcing scripts
-readonly BUNNY_FACE_SLEEPING="(-'.'-)'"
+readonly BUNNY_FACE_SLEEPING="( -.-) zzz"
 # shellcheck disable=SC2034
-readonly BUNNY_FACE_WIDE="(o'.'o)"
+readonly BUNNY_FACE_WIDE="( o.o)"
 
 # --- State file paths ---
 _BUNNY_INSTALL_DATE_FILE="${NUDGE_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/nudge}/bunny_install_date"
@@ -485,11 +485,11 @@ bunny_render() {
         local classic_msg
         classic_msg=$(_bunny_message_classic "$context")
         if [[ -n "$detail" ]]; then
-            printf ' (\\__/)\n %s  %s\n (")_(")  %s' "$BUNNY_FACE_NORMAL" "$classic_msg" "$detail"
+            printf ' (\\(\\\n %s  %s\n o_(")(")  %s' "$BUNNY_FACE_NORMAL" "$classic_msg" "$detail"
         elif [[ -n "$classic_msg" ]]; then
-            printf ' (\\__/)\n %s  %s\n (")_(")' "$BUNNY_FACE_NORMAL" "$classic_msg"
+            printf ' (\\(\\\n %s  %s\n o_(")(")' "$BUNNY_FACE_NORMAL" "$classic_msg"
         else
-            printf ' (\\__/)\n %s\n (")_(")' "$BUNNY_FACE_NORMAL"
+            printf ' (\\(\\\n %s\n o_(")(")' "$BUNNY_FACE_NORMAL"
         fi
         return
     fi
@@ -567,8 +567,8 @@ bunny_dialog() {
     msg=$(bunny_message "$context" "$extra")
 
     if [[ -n "$msg" ]]; then
-        printf ' (\\__/)\n %s  %s\n (")_(")' "$face" "$msg"
+        printf ' (\\(\\\n %s  %s\n o_(")(")' "$face" "$msg"
     else
-        printf ' (\\__/)\n %s\n (")_(")' "$face"
+        printf ' (\\(\\\n %s\n o_(")(")' "$face"
     fi
 }

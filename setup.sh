@@ -80,9 +80,9 @@ for arg in "$@"; do
             ;;
         --help|-h)
             cat <<'HELPTEXT'
- (\__/)
- (='.'=)  nudge setup 2.0.0
- (")_(")  unified installer, updater, and configurator
+ (\(\
+ ( -.-)  nudge setup 2.0.0
+ o_(")(")  unified installer, updater, and configurator
 
 Usage: setup.sh [OPTIONS]
 
@@ -181,11 +181,11 @@ _detect_all() {
 _bunny_farewell() {
     local face="${1:-}"
     local msg="${2:-}"
-    [[ -z "$face" ]] && face='(T.'"'"'T)'
+    [[ -z "$face" ]] && face='( T.T)'
     if [[ -n "$msg" ]]; then
-        printf ' (\\__/)\n %s  %s\n (")_(")ノ\n' "$face" "$msg"
+        printf ' (\\(\\\n %s  %s\n o_(")(")\u30ce\n' "$face" "$msg"
     else
-        printf ' (\\__/)\n %s\n (")_(")ノ\n' "$face"
+        printf ' (\\(\\\n %s\n o_(")(")\u30ce\n' "$face"
     fi
 }
 
@@ -883,7 +883,7 @@ _screen_uninstall_exec() {
 
     if [[ "$personality" != "classic" ]]; then
         echo ""
-        _bunny_farewell "(T.'T)" "okay... bye bye fren. stay safe out there."
+        _bunny_farewell "( T.T)" "okay... bye bye fren. stay safe out there."
         echo ""
         echo "    *waves tiny paw*"
     fi
@@ -894,7 +894,7 @@ _screen_uninstall_exec() {
 
     if [[ "$_KEEP_CONFIG" == "true" ]] && [[ -d "${_PREFIX}/.config/nudge" ]]; then
         if [[ "$personality" != "classic" ]]; then
-            _tui_info "you kept my config... does that mean you might come back? (:'.'=)"
+            _tui_info "you kept my config... does that mean you might come back? ( :.-)"
         else
             _tui_info "Config preserved at: ~/.config/nudge/"
         fi
@@ -1171,7 +1171,7 @@ _cli_dispatch() {
             fi
             echo ""
             if [[ "$_cli_reinstall" == "true" ]] && [[ "${CFG_BUNNY_PERSONALITY:-disney}" != "classic" ]]; then
-                output_banner "YOU CAME BACK!! i knew you would!! i missed you so much!!" "" "(^'.'^)"
+                output_banner "YOU CAME BACK!! i knew you would!! i missed you so much!!" "" "( ^.^)"
             else
                 output_banner "installing nudge v${VERSION}..." ""
             fi
@@ -1200,9 +1200,9 @@ _cli_dispatch() {
             if [[ "$personality" == "classic" ]]; then
                 output_banner "Removing nudge..." ""
             else
-                output_banner "you... you're removing me?" "" "(='.'=)"
+                output_banner "you... you're removing me?" "" "( -.-)'"
                 echo ""
-                output_banner "i tried my best... i really did" "" "(:'.'=)"
+                output_banner "i tried my best... i really did" "" "( :.-)"
             fi
             echo ""
 
@@ -1212,7 +1212,7 @@ _cli_dispatch() {
             if [[ "$personality" == "classic" ]]; then
                 output_banner "nudge has been removed." ""
             else
-                _bunny_farewell "(T.'T)" "*waves tiny paw*"
+                _bunny_farewell "( T.T)" "*waves tiny paw*"
                 echo ""
                 echo "  nudge has been removed. Your system will no longer check for updates at login."
             fi
@@ -1220,7 +1220,7 @@ _cli_dispatch() {
             if [[ "$_KEEP_CONFIG" == "true" ]] && [[ -d "${_PREFIX}/.config/nudge" ]]; then
                 if [[ "$personality" != "classic" ]]; then
                     echo ""
-                    output_banner "you kept my config... does that mean you might come back?" "" "(:'.'=)"
+                    output_banner "you kept my config... does that mean you might come back?" "" "( :.-)"
                 else
                     echo ""
                     echo "  Config preserved at: ~/.config/nudge/"

@@ -264,12 +264,12 @@ _tui_bunny() {
     (( content_width > _TUI_WIDTH - 8 )) && content_width=$(( _TUI_WIDTH - 8 ))
 
     echo ""
-    echo -e "    ${_TUI_SHADOW}(\\__/)${_TUI_RESET}"
-    echo -e "    ${_TUI_SHADOW}(='.'=)${_TUI_RESET}  ${_TUI_BOLD}${msg1}${_TUI_RESET}"
+    echo -e "    ${_TUI_SHADOW}(\\(\\${_TUI_RESET}"
+    echo -e "    ${_TUI_SHADOW}( -.-)${_TUI_RESET}  ${_TUI_BOLD}${msg1}${_TUI_RESET}"
     if [[ -n "$msg2" ]]; then
-        echo -e "    ${_TUI_SHADOW}(\")_(\")${_TUI_RESET}  ${_TUI_SHADOW}${msg2}${_TUI_RESET}"
+        echo -e "    ${_TUI_SHADOW}o_(\")(\")\${_TUI_RESET}  ${_TUI_SHADOW}${msg2}${_TUI_RESET}"
     else
-        echo -e "    ${_TUI_SHADOW}(\")_(\")${_TUI_RESET}"
+        echo -e "    ${_TUI_SHADOW}o_(\")(\")${_TUI_RESET}"
     fi
     echo ""
 }

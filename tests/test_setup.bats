@@ -21,7 +21,7 @@ teardown() {
 @test "setup.sh --help shows bunny and all flags" {
     run "$SETUP" --help
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *'(\__/)'* ]]
+    [[ "$output" == *'(\('* ]]
     [[ "$output" == *"--install"* ]]
     [[ "$output" == *"--uninstall"* ]]
     [[ "$output" == *"--update"* ]]
@@ -172,7 +172,7 @@ teardown() {
     _tui_init
 
     run _tui_bunny "test message" "second line"
-    [[ "$output" == *'(\__/)'* ]]
+    [[ "$output" == *'(\('* ]]
     [[ "$output" == *"test message"* ]]
 }
 

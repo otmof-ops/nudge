@@ -81,9 +81,9 @@ while [[ $# -gt 0 ]]; do
         --help|-h)
             cat <<'HELP'
 
- (\__/)
- (='.'=)  nudge 2.0.0
- (")_(")  A gentle nudge to keep your system fresh.
+ (\(\
+ ( -.-)  nudge 2.0.0
+ o_(")(")  A gentle nudge to keep your system fresh.
 
 Usage: nudge [OPTIONS]
 

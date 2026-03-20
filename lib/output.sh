@@ -119,19 +119,19 @@ log() { log_info "$@"; }
 output_banner() {
     local msg_line1="${1:-}"
     local msg_line2="${2:-}"
-    local face="${3:-(='.'=)}"
+    local face="${3:-( -.-)}"
     if [[ -n "$msg_line1" ]] && [[ -n "$msg_line2" ]]; then
-        printf ' (\\__/)\n'
+        printf ' (\\(\\\n'
         printf ' %s  %s\n' "$face" "$msg_line1"
-        printf ' (")_(")  %s\n' "$msg_line2"
+        printf ' o_(")(")  %s\n' "$msg_line2"
     elif [[ -n "$msg_line1" ]]; then
-        printf ' (\\__/)\n'
+        printf ' (\\(\\\n'
         printf ' %s  %s\n' "$face" "$msg_line1"
-        printf ' (")_(")\n'
+        printf ' o_(")(") \n'
     else
-        printf ' (\\__/)\n'
+        printf ' (\\(\\\n'
         printf ' %s\n' "$face"
-        printf ' (")_(")\n'
+        printf ' o_(")(") \n'
     fi
 }
 

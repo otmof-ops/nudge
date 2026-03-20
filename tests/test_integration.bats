@@ -20,7 +20,7 @@ teardown() {
 @test "nudge --help prints usage with bunny mascot" {
     run "$NUDGE" --help
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *'(\__/)'* ]]
+    [[ "$output" == *'(\('* ]]
     [[ "$output" == *"nudge 2.0.0"* ]]
     [[ "$output" == *"Usage:"* ]]
     [[ "$output" == *"--dry-run"* ]]

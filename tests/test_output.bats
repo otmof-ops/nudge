@@ -126,7 +126,7 @@ teardown() {
 @test "output_banner with two args renders bunny with both messages" {
     local output
     output=$(output_banner "nudge: 14 updates available" "3 security · 1 critical")
-    [[ "$output" == *'(\__/)'* ]]
+    [[ "$output" == *'(\('* ]]
     [[ "$output" == *"nudge: 14 updates available"* ]]
     [[ "$output" == *"3 security · 1 critical"* ]]
 }
@@ -134,15 +134,15 @@ teardown() {
 @test "output_banner with one arg renders bunny with single message" {
     local output
     output=$(output_banner "nudge 2.0.0")
-    [[ "$output" == *'(\__/)'* ]]
+    [[ "$output" == *'(\('* ]]
     [[ "$output" == *"nudge 2.0.0"* ]]
 }
 
 @test "output_banner with no args renders bare bunny" {
     local output
     output=$(output_banner)
-    [[ "$output" == *'(\__/)'* ]]
-    [[ "$output" == *'(")_(")'* ]]
+    [[ "$output" == *'(\('* ]]
+    [[ "$output" == *'o_(")(")'* ]]
 }
 
 @test "json_escape handles backslash" {

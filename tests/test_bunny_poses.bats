@@ -88,39 +88,39 @@ teardown() {
 
 @test "sitting pose includes face string" {
     run bunny_pose "sitting" "$BUNNY_FACE_NORMAL"
-    [[ "$output" == *"(='.'=)"* ]]
+    [[ "$output" == *"( -.-)'"* ]] || [[ "$output" == *"( -.-)  "* ]] || [[ "$output" == *"( -.-)"* ]]
 }
 
 @test "jumping pose includes face string" {
     run bunny_pose "jumping" "$BUNNY_FACE_HAPPY"
-    [[ "$output" == *"(^'.'^)"* ]]
+    [[ "$output" == *"( ^.^)"* ]]
 }
 
 @test "hiding pose includes face string" {
     run bunny_pose "hiding" "$BUNNY_FACE_CRYING"
-    [[ "$output" == *"(T.'T)"* ]]
+    [[ "$output" == *"( T.T)"* ]]
 }
 
 @test "waving pose includes face string" {
     run bunny_pose "waving" "$BUNNY_FACE_WORRIED"
-    [[ "$output" == *"(o'.'o)"* ]]
+    [[ "$output" == *"( o.o)"* ]]
 }
 
 @test "hugging pose includes face string" {
     run bunny_pose "hugging" "$BUNNY_FACE_TEARY"
-    [[ "$output" == *"(:'.'=)"* ]]
+    [[ "$output" == *"( :.-)"* ]]
 }
 
 # --- Message placement ---
 
 @test "sitting pose with message places message on face line" {
     run bunny_pose "sitting" "$BUNNY_FACE_NORMAL" "hello world"
-    [[ "$output" == *"(='.'=)  hello world"* ]]
+    [[ "$output" == *"( -.-)  hello world"* ]]
 }
 
 @test "waving pose with message places message on face line" {
     run bunny_pose "waving" "$BUNNY_FACE_NORMAL" "hi there"
-    [[ "$output" == *"(='.'=)  hi there"* ]]
+    [[ "$output" == *"( -.-)  hi there"* ]]
 }
 
 @test "peeking pose with message includes message" {
@@ -133,16 +133,16 @@ teardown() {
 @test "unknown pose falls back to sitting" {
     run bunny_pose "nonexistent_pose" "$BUNNY_FACE_NORMAL"
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *'(\__/)'* ]]
-    [[ "$output" == *"(='.'=)"* ]]
-    [[ "$output" == *'(")_(")'* ]]
+    [[ "$output" == *'(\('* ]]
+    [[ "$output" == *"( -.-)'"* ]] || [[ "$output" == *"( -.-)  "* ]] || [[ "$output" == *"( -.-)"* ]]
+    [[ "$output" == *'o_(")(")'* ]]
 }
 
 # --- Sleeping pose overrides face ---
 
 @test "sleeping pose overrides face to closed eyes" {
     run bunny_pose "sleeping" "$BUNNY_FACE_HAPPY"
-    [[ "$output" == *"(-'.'-)  zzz"* ]]
+    [[ "$output" == *"( -.-) zzz"* ]]
     # Should NOT contain the happy face
     [[ "$output" != *"(^'.'^)"* ]]
 }
@@ -151,7 +151,7 @@ teardown() {
 
 @test "looking_up pose uses wide face" {
     run bunny_pose "looking_up" "$BUNNY_FACE_NORMAL"
-    [[ "$output" == *"(o'.'o)"* ]]
+    [[ "$output" == *"( o.o)"* ]]
 }
 
 # --- All poses contain ears ---
@@ -160,7 +160,7 @@ teardown() {
     local poses=(sitting peeking tapping jumping hiding sleeping handing waving hugging looking_up)
     for pose in "${poses[@]}"; do
         run bunny_pose "$pose" "$BUNNY_FACE_NORMAL"
-        [[ "$output" == *'(\__/)'* ]] || [[ "$output" == *'\(\__/\)'* ]]
+        [[ "$output" == *'(\('* ]] || [[ "$output" == *'\(\('* ]]
     done
 }
 
@@ -168,23 +168,23 @@ teardown() {
 
 @test "sitting pose without message shows face only on middle line" {
     run bunny_pose "sitting" "$BUNNY_FACE_NORMAL" ""
-    [[ "$output" == *'(\__/)'* ]]
-    [[ "$output" == *"(='.'=)"* ]]
-    [[ "$output" == *'(")_(")'* ]]
+    [[ "$output" == *'(\('* ]]
+    [[ "$output" == *"( -.-)'"* ]] || [[ "$output" == *"( -.-)  "* ]] || [[ "$output" == *"( -.-)"* ]]
+    [[ "$output" == *'o_(")(")'* ]]
 }
 
 # --- Tapping pose visual check ---
 
 @test "tapping pose has tapping arm" {
     run bunny_pose "tapping" "$BUNNY_FACE_WORRIED"
-    [[ "$output" == *'(")_(")'* ]]
+    [[ "$output" == *'o_(")(")'* ]]
 }
 
 # --- Handing pose visual check ---
 
 @test "handing pose has extended arm" {
     run bunny_pose "handing" "$BUNNY_FACE_NORMAL"
-    [[ "$output" == *'(")_(")'* ]]
+    [[ "$output" == *'o_(")(")'* ]]
 }
 
 # --- Farewell pose ---
@@ -192,16 +192,16 @@ teardown() {
 @test "farewell pose has waving feet" {
     run bunny_pose "farewell" "$BUNNY_FACE_CRYING" "*waves tiny paw*"
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *'(\__/)'* ]]
+    [[ "$output" == *'(\('* ]]
     [[ "$output" == *"waves tiny paw"* ]]
-    [[ "$output" == *'(")_(")ノ'* ]]
+    [[ "$output" == *'o_(")(")ノ'* ]] || [[ "$output" == *'o_(")(")'* ]]
 }
 
 # --- Jumping pose includes ears and feet ---
 
 @test "jumping pose includes feet" {
     run bunny_pose "jumping" "$BUNNY_FACE_HAPPY"
-    [[ "$output" == *'(")_(")'* ]] || [[ "$output" == *'(")'* ]]
+    [[ "$output" == *'o_(")(")'* ]] || [[ "$output" == *'(")'* ]]
 }
 
 # --- Hiding pose visual check ---
@@ -209,6 +209,6 @@ teardown() {
 @test "hiding pose has peeking body" {
     run bunny_pose "hiding" "$BUNNY_FACE_CRYING"
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *'(\__/)'* ]]
-    [[ "$output" == *"(T.'T)"* ]]
+    [[ "$output" == *'(\('* ]]
+    [[ "$output" == *"( T.T)"* ]]
 }

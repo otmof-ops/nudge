@@ -18,9 +18,9 @@ bunny_pose() {
 _bunny_pose_sitting() {
     local face="$1" msg="${2:-}"
     if [[ -n "$msg" ]]; then
-        printf ' (\\__/)\n %s  %s\n (")_(")' "$face" "$msg"
+        printf ' (\\(\\\n %s  %s\n o_(")(")' "$face" "$msg"
     else
-        printf ' (\\__/)\n %s\n (")_(")' "$face"
+        printf ' (\\(\\\n %s\n o_(")(")' "$face"
     fi
 }
 
@@ -29,9 +29,9 @@ _bunny_pose_sitting() {
 _bunny_pose_peeking() {
     local face="$1" msg="${2:-}"
     if [[ -n "$msg" ]]; then
-        printf ' (\\__/)\n %s |  %s\n (")_(") |' "$face" "$msg"
+        printf ' (\\(\\ |\n %s |  %s\n o_(")(") |' "$face" "$msg"
     else
-        printf ' (\\__/)\n %s |\n (")_(") |' "$face"
+        printf ' (\\(\\ |\n %s |\n o_(")(") |' "$face"
     fi
 }
 
@@ -40,9 +40,9 @@ _bunny_pose_peeking() {
 _bunny_pose_tapping() {
     local face="$1" msg="${2:-}"
     if [[ -n "$msg" ]]; then
-        printf ' (\\__/)\n %s  %s\n (\")_(\")o' "$face" "$msg"
+        printf ' (\\(\\\n %s  %s\n o_(")(")-o' "$face" "$msg"
     else
-        printf ' (\\__/)\n %s\n (\")_(\")o' "$face"
+        printf ' (\\(\\\n %s\n o_(")(")-o' "$face"
     fi
 }
 
@@ -51,9 +51,9 @@ _bunny_pose_tapping() {
 _bunny_pose_jumping() {
     local face="$1" msg="${2:-}"
     if [[ -n "$msg" ]]; then
-        printf ' \\(\\__/)/\n  %s  %s\n /(")_(")\\' "$face" "$msg"
+        printf ' \\(\\(\\/\n  %s  %s\n /o_(")(")\\' "$face" "$msg"
     else
-        printf ' \\(\\__/)/\n  %s\n /(")_(")\\' "$face"
+        printf ' \\(\\(\\/\n  %s\n /o_(")(")\\' "$face"
     fi
 }
 
@@ -62,9 +62,9 @@ _bunny_pose_jumping() {
 _bunny_pose_hiding() {
     local face="$1" msg="${2:-}"
     if [[ -n "$msg" ]]; then
-        printf ' (\\__/)\n (\")%s(\")  %s\n  (")_(")' "$face" "$msg"
+        printf ' (\\(\\\n (\")%s(\")  %s\n  o_(")(")' "$face" "$msg"
     else
-        printf ' (\\__/)\n (\")%s(\")\n  (")_(")' "$face"
+        printf ' (\\(\\\n (\")%s(\")\n  o_(")(")' "$face"
     fi
 }
 
@@ -73,11 +73,11 @@ _bunny_pose_hiding() {
 _bunny_pose_sleeping() {
     local _face="$1" msg="${2:-}"
     # Always override face for sleeping
-    local sleep_face="(-'.'-)  zzz"
+    local sleep_face="( -.-) zzz"
     if [[ -n "$msg" ]]; then
-        printf ' (\\__/)\n %s  %s\n (")_(")' "$sleep_face" "$msg"
+        printf ' (\\(\\\n %s  %s\n o_(")(")' "$sleep_face" "$msg"
     else
-        printf ' (\\__/)\n %s\n (")_(")' "$sleep_face"
+        printf ' (\\(\\\n %s\n o_(")(")' "$sleep_face"
     fi
 }
 
@@ -86,9 +86,9 @@ _bunny_pose_sleeping() {
 _bunny_pose_handing() {
     local face="$1" msg="${2:-}"
     if [[ -n "$msg" ]]; then
-        printf ' (\\__/)\n %s  %s\n (")_(")>' "$face" "$msg"
+        printf ' (\\(\\\n %s  %s\n o_(")(")>' "$face" "$msg"
     else
-        printf ' (\\__/)\n %s\n (")_(")>' "$face"
+        printf ' (\\(\\\n %s\n o_(")(")>' "$face"
     fi
 }
 
@@ -97,9 +97,9 @@ _bunny_pose_handing() {
 _bunny_pose_waving() {
     local face="$1" msg="${2:-}"
     if [[ -n "$msg" ]]; then
-        printf ' (\\__/)/\n %s  %s\n (")_(")' "$face" "$msg"
+        printf ' (\\(\\/\n %s  %s\n o_(")(")' "$face" "$msg"
     else
-        printf ' (\\__/)/\n %s\n (")_(")' "$face"
+        printf ' (\\(\\/\n %s\n o_(")(")' "$face"
     fi
 }
 
@@ -108,9 +108,9 @@ _bunny_pose_waving() {
 _bunny_pose_hugging() {
     local face="$1" msg="${2:-}"
     if [[ -n "$msg" ]]; then
-        printf ' (\\__/)\n(%s)  %s\n (\")(\")' "$face" "$msg"
+        printf ' (\\(\\\n(%s)  %s\n (\")(\")' "$face" "$msg"
     else
-        printf ' (\\__/)\n(%s)\n (\")(\")' "$face"
+        printf ' (\\(\\\n(%s)\n (\")(\")' "$face"
     fi
 }
 
@@ -120,9 +120,9 @@ _bunny_pose_looking_up() {
     local _face="$1" msg="${2:-}"
     local wide_face="$BUNNY_FACE_WIDE"
     if [[ -n "$msg" ]]; then
-        printf ' (\\__/)\n %s  %s\n (")_(")' "$wide_face" "$msg"
+        printf ' (\\(\\\n %s  %s\n o_(")(")' "$wide_face" "$msg"
     else
-        printf ' (\\__/)\n %s\n (")_(")' "$wide_face"
+        printf ' (\\(\\\n %s\n o_(")(")' "$wide_face"
     fi
 }
 
@@ -131,8 +131,8 @@ _bunny_pose_looking_up() {
 _bunny_pose_farewell() {
     local face="$1" msg="${2:-}"
     if [[ -n "$msg" ]]; then
-        printf ' (\\__/)\n %s  %s\n (")_(")ノ' "$face" "$msg"
+        printf ' (\\(\\\n %s  %s\n o_(")(")\u30ce' "$face" "$msg"
     else
-        printf ' (\\__/)\n %s\n (")_(")ノ' "$face"
+        printf ' (\\(\\\n %s\n o_(")(")\u30ce' "$face"
     fi
 }
