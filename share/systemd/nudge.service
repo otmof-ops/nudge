@@ -1,0 +1,14 @@
+[Unit]
+Description=nudge — system update check
+Documentation=man:nudge(1)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/nudge.sh
+Environment=DISPLAY=:0
+Environment=_NUDGE_TRIGGER=timer
+
+[Install]
+WantedBy=default.target

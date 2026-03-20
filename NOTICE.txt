@@ -1,0 +1,107 @@
+NOTICE — nudge
+
+================================================================================
+COPYRIGHT NOTICE
+================================================================================
+
+Copyright (c) 2025-2026 OFFTRACKMEDIA Studios
+ABN 84 290 819 896
+Australia (Commonwealth)
+
+All rights reserved.
+
+================================================================================
+LICENSE IDENTIFICATION
+================================================================================
+
+This work is licensed under the OFFTRACKMEDIA Source-Available License.
+
+Full license text: LICENSE
+
+SPDX License Identifier: LicenseRef-OFFTRACKMEDIA-SAL
+
+================================================================================
+PERMITTED USE
+================================================================================
+
+This repository and its contents are provided for the following purposes:
+
+  1. Personal, non-commercial use on systems you own or control
+  2. Educational review and study of the source code
+  3. Contributing improvements back to the project under the CLA
+  4. Security research and vulnerability reporting via responsible disclosure
+
+Commercial use, redistribution, and derivative works require prior written
+consent from OFFTRACKMEDIA Studios. See the EULA for full terms.
+
+================================================================================
+THIRD-PARTY ACKNOWLEDGEMENTS
+================================================================================
+
+This project uses or references third-party components that remain the
+intellectual property of their respective owners.
+
+  - BATS (bats-core) — Bash Automated Testing System (MIT License)
+  - ShellCheck — Shell script static analysis (GPLv3)
+  - flock — File locking utility (part of util-linux, GPLv2+)
+  - kdialog — KDE dialog tool (GPLv2+)
+  - zenity — GNOME dialog tool (LGPLv2.1+)
+  - dunstify — Dunst notification tool (BSD 3-Clause)
+  - notify-send — Desktop notification sender (LGPLv2.1+)
+  - gdbus — GLib D-Bus tool (LGPLv2.1+)
+
+See CREDITS-AND-COMMUNITY.md for complete attribution tables.
+
+================================================================================
+TRADEMARKS
+================================================================================
+
+"nudge" and associated logos are trademarks of OFFTRACKMEDIA Studios.
+
+All other trademarks, service marks, trade names, product names, and logos
+appearing in this repository are the property of their respective owners.
+
+================================================================================
+WARRANTY DISCLAIMER
+================================================================================
+
+THE MATERIALS ARE PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTY OF ANY
+KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
+
+IN NO EVENT SHALL OFFTRACKMEDIA STUDIOS BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING BUT NOT
+LIMITED TO PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES, LOSS OF USE, DATA, OR
+PROFITS, OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
+OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THE MATERIALS, EVEN IF
+ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+================================================================================
+CONTACT
+================================================================================
+
+OFFTRACKMEDIA Studios
+Australia (Commonwealth)
+ABN 84 290 819 896
+
+Repository:  https://github.com/otmof-ops/nudge
+Issues:      https://github.com/otmof-ops/nudge/issues
+
+================================================================================
+CROSS-REFERENCES
+================================================================================
+
+This NOTICE should be read in conjunction with:
+
+  - LICENSE                              — Full license text
+  - EULA/OFFTRACKMEDIA_EULA_2025.txt    — End User License Agreement
+  - docs/SAFETY.md                       — Safety framework
+  - docs/STANDARDS.md                    — Repository standards and quality gates
+  - docs/CONTRIBUTING.md                 — Contribution standards and CLA
+  - docs/CREDITS-AND-COMMUNITY.md        — Full attribution tables
+  - README.md                            — Project overview and navigation
+
+================================================================================
+END OF NOTICE
+================================================================================

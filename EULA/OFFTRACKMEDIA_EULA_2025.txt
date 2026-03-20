@@ -1,0 +1,599 @@
+OFFTRACKMEDIA STUDIOS — END-USER LICENSE AGREEMENT (EULA)
+
+Version 2.1-Software — Effective 19 March 2026
+ABN: 84 290 819 896
+Issued By: Legal & Compliance Division — OFFTRACKMEDIA Studios
+Governing Law: Western Australia, Commonwealth of Australia
+
+================================================================================
+IMPORTANT — READ CAREFULLY BEFORE INSTALLING, COPYING, OR USING THIS SOFTWARE.
+BY INSTALLING, COPYING, CLONING, FORKING, OR OTHERWISE USING THIS SOFTWARE
+(THE "SOFTWARE"), YOU ACKNOWLEDGE THAT YOU HAVE READ, UNDERSTOOD, AND AGREE TO
+BE BOUND BY ALL TERMS AND CONDITIONS OF THIS EULA. IF YOU DO NOT AGREE, YOU
+MUST IMMEDIATELY CEASE ALL ACCESS TO AND USE OF THE SOFTWARE AND DESTROY ANY
+COPIES IN YOUR POSSESSION.
+================================================================================
+
+1. DEFINITIONS
+
+1.1 "Agreement" means this End-User License Agreement, including all exhibits,
+    schedules, and documents incorporated by reference.
+
+1.2 "Authorized Purpose" means personal, non-commercial use of the Software on
+    systems owned or controlled by the Licensee, including installation,
+    configuration, and execution of the Software for the purpose of checking for
+    and applying system updates on Linux-based desktop or server systems.
+
+1.3 "Company" or "OTM" means OFFTRACKMEDIA Studios, ABN 84 290 819 896, its
+    successors, assigns, subsidiaries, affiliates, officers, directors,
+    employees, agents, and authorized representatives.
+
+1.4 "Confidential Information" means all non-public aspects of the Software,
+    including but not limited to proprietary algorithms, architectural design,
+    internal documentation, and any information marked or reasonably understood
+    to be confidential or proprietary, whether disclosed in written, oral,
+    electronic, or visual form. For the avoidance of doubt, source code that is
+    publicly available on the Company's designated repository is not Confidential
+    Information by virtue of its public availability alone, but the compilation,
+    arrangement, and architectural methodology of the Software remain
+    Confidential Information.
+
+1.5 "Derivative Work" means any work that is based upon, incorporates, compiles,
+    translates, adapts, modifies, transforms, or otherwise builds upon the
+    Software, in whole or in part, including but not limited to modified
+    versions, ports, forks, or software that incorporates substantial portions
+    of the Software's source code or architecture.
+
+1.6 "Intellectual Property Rights" means all rights, title, and interest in and
+    to patents, copyrights, trademarks, trade secrets, trade dress, service
+    marks, moral rights, database rights, design rights, mask work rights, rights
+    of publicity, domain names, and all other intellectual and proprietary rights
+    of any kind, whether registered or unregistered, and all applications,
+    renewals, extensions, and restorations thereof, in any jurisdiction worldwide.
+
+1.7 "Licensee" or "You" means the individual or entity installing, accessing,
+    or using the Software, and where applicable, the organization on whose
+    behalf such individual is acting.
+
+1.8 "Software" means the nudge application, including all source code, compiled
+    binaries, library modules, configuration files, documentation, scripts
+    (including but not limited to install.sh, uninstall.sh, nudge.sh, and all
+    files in the lib/ directory), man pages, completion scripts, systemd unit
+    files, test suites, and any associated assets distributed as part of the
+    nudge repository, whether in their original or modified form. "Software"
+    includes all updates, patches, bug fixes, and new versions made available
+    by OTM.
+
+1.9 "OTM Marks" means all trademarks, service marks, trade names, logos, brand
+    identifiers, slogans (including but not limited to "Building Empires, Not
+    Just Brands"), trade dress, and domain names owned, registered, or used by
+    OFFTRACKMEDIA Studios.
+
+1.10 "Third-Party Content" means any open-source software, third-party
+     libraries, or external content referenced within the Software that is
+     subject to its own separate license terms.
+
+
+2. GRANT OF LICENSE
+
+2.1 Subject to the terms and conditions of this Agreement, OTM grants Licensee
+    a limited, non-exclusive, non-transferable, non-sublicensable, revocable
+    license to install, use, and execute the Software solely for the Authorized
+    Purpose.
+
+2.2 This license does not constitute a sale, assignment, or transfer of any
+    Intellectual Property Rights. All rights not expressly granted herein are
+    reserved by OTM.
+
+2.3 The license granted under this Section 2 is conditional upon Licensee's
+    continued compliance with all terms of this Agreement. Any breach of this
+    Agreement shall result in the automatic and immediate termination of all
+    rights granted hereunder, without notice or opportunity to cure.
+
+2.4 Source code availability. The Software's source code is made available on
+    OTM's designated public repository for the purposes of transparency,
+    security audit, and educational reference. The availability of source code
+    does not constitute a grant of any rights beyond those expressly stated in
+    this Section 2. The Software is source-available proprietary software, not
+    open-source software.
+
+
+3. SOFTWARE SAFETY ACKNOWLEDGMENT
+
+3.1 The Software interacts with system-level package management facilities
+    (including but not limited to apt, dnf, pacman, zypper, flatpak, and snap)
+    and may invoke privileged operations (sudo) that modify installed system
+    packages. Licensee acknowledges that system package upgrades involve inherent
+    risks, including but not limited to:
+
+    (a) SYSTEM INSTABILITY — Package upgrades may introduce regressions,
+        dependency conflicts, or incompatibilities that render the system
+        unstable, unbootable, or require manual intervention to recover.
+
+    (b) DATA LOSS — In rare circumstances, package upgrades (particularly
+        kernel or filesystem-related packages) may result in data loss.
+        Licensee is solely responsible for maintaining adequate backups.
+
+    (c) SERVICE INTERRUPTION — Package upgrades on systems running services
+        may restart or interrupt those services, causing downtime.
+
+    (d) PRIVILEGE ESCALATION — The Software invokes the configured update
+        command with elevated privileges (sudo). Licensee is responsible for
+        ensuring that the configured update command is appropriate and safe
+        for their system.
+
+3.2 The Software provides optional pre-upgrade snapshot functionality as a risk
+    mitigation measure. OTM does not warrant that snapshots will be sufficient
+    to recover from any upgrade failure. Licensee is solely responsible for
+    ensuring adequate backup and recovery procedures are in place before
+    accepting any system update prompted by the Software.
+
+3.3 The Software does not perform unattended updates. All system modifications
+    require explicit user consent through the interactive prompt. Licensee
+    acknowledges that by accepting an update prompt, they authorize the
+    execution of the configured update command on their system.
+
+3.4 OTM provides the Software in good faith as a convenience tool. The Software
+    does not replace: a qualified system administrator's judgment; proper change
+    management procedures; vendor-specific upgrade documentation; or adequate
+    backup and disaster recovery practices. Licensee assumes all responsibility
+    for the consequences of system updates initiated through the Software.
+
+
+4. USE RESTRICTIONS
+
+4.1 The Software is provided for personal, non-commercial use. Licensee may
+    install and use the Software on any number of systems owned or controlled
+    by the Licensee for the Authorized Purpose.
+
+4.2 Commercial use of the Software — including but not limited to redistribution
+    as part of a commercial product, inclusion in a commercial Linux
+    distribution, offering the Software as part of a managed service, or
+    charging fees for access to or support of the Software — requires the prior
+    express written consent of OTM.
+
+4.3 Licensee shall not use the Software, in whole or in part, to create any
+    competing product, service, or offering without OTM's prior written consent.
+
+4.4 Licensee may contribute bug reports, feature requests, and patches to OTM's
+    designated repository subject to the terms of CONTRIBUTING.md. Acceptance of
+    any contribution is at OTM's sole discretion.
+
+
+5. INTELLECTUAL PROPERTY OWNERSHIP
+
+5.1 OTM retains all right, title, and interest in and to the Software,
+    including all Intellectual Property Rights therein. Nothing in this Agreement
+    shall be construed as transferring any ownership interest in the Software
+    to Licensee.
+
+5.2 All Derivative Works created by or on behalf of Licensee that are submitted
+    to OTM's designated repository shall be owned exclusively by OTM to the
+    maximum extent permitted by applicable law. By submitting a Derivative Work
+    to OTM's repository, Licensee irrevocably assigns, transfers, and conveys
+    to OTM all right, title, and interest in and to such Derivative Work,
+    including all Intellectual Property Rights therein. To the extent such
+    assignment is not effective under applicable law, Licensee grants OTM an
+    exclusive, perpetual, irrevocable, worldwide, fully paid-up, royalty-free
+    license to use, reproduce, modify, distribute, publicly display, publicly
+    perform, sublicense, and create derivative works of such Derivative Work.
+
+5.3 Derivative Works that are not submitted to OTM's repository remain the
+    property of the Licensee, subject to the restrictions in this Agreement
+    (including Sections 4 and 8). Licensee may modify the Software for personal,
+    non-commercial use, provided that any such modifications are not distributed,
+    published, or made available to third parties without OTM's prior written
+    consent.
+
+5.4 Licensee shall not, and shall not permit any third party to: (a) reverse
+    engineer, decompile, or disassemble the compilation or build methodology
+    of the Software beyond what is necessary for interoperability as permitted
+    by applicable law; (b) attempt to derive the proprietary architectural
+    design patterns or engineering methodologies used to create the Software;
+    or (c) use any portion of the Software to train, fine-tune, or develop any
+    artificial intelligence or machine learning model without OTM's prior
+    written consent.
+
+
+6. OTM MARKS AND BRAND PROTECTION
+
+6.1 No right, license, or interest in or to any OTM Marks is granted under this
+    Agreement. Licensee shall not use any OTM Marks for any purpose without
+    OTM's prior written consent.
+
+6.2 Licensee shall not: (a) register or attempt to register any trademark,
+    domain name, social media account, or trade name that is identical or
+    confusingly similar to any OTM Mark; (b) use any OTM Mark in any manner
+    that is likely to cause confusion, mistake, or deception; (c) dilute,
+    tarnish, or bring into disrepute any OTM Mark; or (d) challenge or assist
+    others in challenging OTM's ownership of or the validity of any OTM Mark.
+
+6.3 All goodwill arising from any authorized use of OTM Marks shall inure
+    exclusively to the benefit of OTM.
+
+
+7. CONFIDENTIALITY
+
+7.1 Licensee shall hold all Confidential Information in strict confidence and
+    shall not disclose, publish, or otherwise disseminate Confidential
+    Information to any third party without OTM's prior written consent.
+
+7.2 Licensee shall protect Confidential Information using at least the same
+    degree of care it uses to protect its own confidential information, but in
+    no event less than reasonable care.
+
+7.3 Licensee shall restrict access to Confidential Information to those of its
+    employees, contractors, and agents who: (a) have a demonstrable need to know
+    for the Authorized Purpose; and (b) are bound by written confidentiality
+    obligations no less protective than those contained herein.
+
+7.4 The obligations of confidentiality set forth in this Section 7 shall survive
+    any termination or expiration of this Agreement and shall continue for a
+    period of five (5) years from the date of last disclosure, or for so long
+    as the Confidential Information remains a trade secret, whichever is longer.
+
+7.5 Confidential Information shall not include information that Licensee can
+    demonstrate: (a) was publicly available at the time of disclosure through no
+    fault of Licensee; (b) was already known to Licensee without restriction
+    prior to disclosure; (c) was independently developed by Licensee without
+    use of or reference to the Confidential Information; or (d) was received
+    from a third party without restriction and without breach of any obligation
+    of confidentiality.
+
+7.6 If Licensee is compelled by law, regulation, or legal process to disclose
+    Confidential Information, Licensee shall: (a) provide OTM with prompt
+    written notice to the extent legally permitted; (b) cooperate with OTM in
+    seeking a protective order or other appropriate remedy; and (c) disclose
+    only the minimum amount of Confidential Information necessary to comply.
+
+
+8. RESTRICTIONS
+
+8.1 Licensee shall not, and shall not permit any third party to:
+
+    (a) Copy, reproduce, distribute, publish, display, perform, or transmit the
+        Software except as expressly permitted under this Agreement;
+
+    (b) Sublicense, sell, resell, lease, rent, lend, or otherwise transfer or
+        make available the Software to any third party;
+
+    (c) Remove, alter, obscure, or deface any copyright notices, proprietary
+        legends, trademark designations, document identifiers, attribution
+        headers, or other proprietary markings on or in the Software;
+
+    (d) Use the Software for any unlawful, harmful, fraudulent, or unethical
+        purpose, including but not limited to unauthorized access to systems,
+        circumvention of security measures, or any activity that violates
+        applicable laws, regulations, or industry standards;
+
+    (e) Misrepresent the origin, authorship, or ownership of the Software or
+        any Derivative Work;
+
+    (f) Use the Software in any manner that infringes, misappropriates, or
+        otherwise violates any Intellectual Property Rights or other rights of
+        any third party;
+
+    (g) Benchmark, test, or evaluate the Software for the purpose of creating
+        a competing product or service without OTM's prior written consent;
+
+    (h) Use any data mining, scraping, crawling, or similar automated data
+        gathering or extraction methods on the Software without OTM's prior
+        written consent;
+
+    (i) Distribute or publish modified versions of the Software without OTM's
+        prior written consent; or
+
+    (j) Circumvent, disable, or otherwise interfere with any security, access
+        control, or digital rights management features associated with the
+        Software.
+
+
+9. DISCLAIMER OF WARRANTIES
+
+9.1 THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTY OF
+    ANY KIND, WHETHER EXPRESS, IMPLIED, STATUTORY, OR OTHERWISE.
+
+9.2 OTM EXPRESSLY DISCLAIMS ALL WARRANTIES, INCLUDING BUT NOT LIMITED TO THE
+    IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE,
+    TITLE, NON-INFRINGEMENT, ACCURACY, COMPLETENESS, RELIABILITY, SECURITY,
+    COMPATIBILITY, TIMELINESS, AND QUIET ENJOYMENT.
+
+9.3 OTM DOES NOT WARRANT THAT THE SOFTWARE WILL MEET LICENSEE'S REQUIREMENTS,
+    THAT THE SOFTWARE WILL BE UNINTERRUPTED, TIMELY, SECURE, OR ERROR-FREE,
+    THAT THE RESULTS OBTAINED FROM USE OF THE SOFTWARE WILL BE ACCURATE OR
+    RELIABLE, THAT THE SOFTWARE WILL BE COMPATIBLE WITH ALL LINUX DISTRIBUTIONS
+    OR PACKAGE MANAGERS, OR THAT ANY DEFECTS IN THE SOFTWARE WILL BE CORRECTED.
+
+9.4 OTM DOES NOT WARRANT THAT SYSTEM UPDATES INITIATED THROUGH THE SOFTWARE
+    WILL COMPLETE SUCCESSFULLY, WILL NOT CAUSE SYSTEM INSTABILITY, OR WILL NOT
+    RESULT IN DATA LOSS. LICENSEE ASSUMES ALL RESPONSIBILITY AND RISK FOR THE
+    SELECTION, USE, AND RESULTS OBTAINED FROM THE SOFTWARE AND ANY SYSTEM
+    UPDATES INITIATED THROUGH IT.
+
+9.5 SOME JURISDICTIONS DO NOT ALLOW THE EXCLUSION OF IMPLIED WARRANTIES. IN
+    SUCH JURISDICTIONS, THE ABOVE EXCLUSIONS SHALL APPLY TO THE MAXIMUM EXTENT
+    PERMITTED BY APPLICABLE LAW.
+
+
+10. LIMITATION OF LIABILITY
+
+10.1 TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL OTM,
+     ITS AFFILIATES, SUBSIDIARIES, OFFICERS, DIRECTORS, EMPLOYEES, AGENTS,
+     LICENSORS, OR SUPPLIERS BE LIABLE TO LICENSEE OR ANY THIRD PARTY FOR ANY
+     INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, PUNITIVE, OR EXEMPLARY
+     DAMAGES, INCLUDING BUT NOT LIMITED TO DAMAGES FOR LOSS OF PROFITS, REVENUE,
+     GOODWILL, DATA, USE, SYSTEM DOWNTIME, BUSINESS OPPORTUNITIES, OR OTHER
+     INTANGIBLE LOSSES, ARISING OUT OF OR IN CONNECTION WITH THIS AGREEMENT OR
+     THE USE OF OR INABILITY TO USE THE SOFTWARE, REGARDLESS OF THE CAUSE OF
+     ACTION OR THE THEORY OF LIABILITY (INCLUDING CONTRACT, TORT, STRICT
+     LIABILITY, NEGLIGENCE, OR OTHERWISE), EVEN IF OTM HAS BEEN ADVISED OF THE
+     POSSIBILITY OF SUCH DAMAGES.
+
+10.2 TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, OTM'S TOTAL AGGREGATE
+     LIABILITY ARISING OUT OF OR IN CONNECTION WITH THIS AGREEMENT SHALL NOT
+     EXCEED ONE HUNDRED AUSTRALIAN DOLLARS (AUD $100.00).
+
+10.3 THE LIMITATIONS OF LIABILITY SET FORTH IN THIS SECTION 10 SHALL APPLY
+     REGARDLESS OF WHETHER OTM HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH
+     DAMAGES AND NOTWITHSTANDING THE FAILURE OF ESSENTIAL PURPOSE OF ANY
+     LIMITED REMEDY.
+
+10.4 NOTHING IN THIS AGREEMENT SHALL EXCLUDE OR LIMIT LIABILITY THAT CANNOT BE
+     LAWFULLY EXCLUDED OR LIMITED UNDER THE AUSTRALIAN CONSUMER LAW (SCHEDULE 2
+     OF THE COMPETITION AND CONSUMER ACT 2010 (CTH)) OR OTHER MANDATORY
+     APPLICABLE LAW.
+
+
+11. INDEMNIFICATION
+
+11.1 Licensee shall indemnify, defend, and hold harmless OTM, its affiliates,
+     subsidiaries, officers, directors, employees, agents, successors, and
+     assigns (collectively, "Indemnified Parties") from and against any and all
+     claims, demands, actions, suits, proceedings, losses, damages, liabilities,
+     costs, and expenses (including reasonable attorneys' fees, expert witness
+     fees, and court costs) (collectively, "Losses") arising out of or relating
+     to: (a) Licensee's use of the Software; (b) any Derivative Work created
+     by or on behalf of Licensee; (c) Licensee's breach of any term of this
+     Agreement; (d) Licensee's violation of any applicable law, regulation, or
+     third-party right; (e) any system damage, data loss, or service
+     interruption arising from system updates initiated through the Software;
+     or (f) any negligent, reckless, or intentional misconduct by Licensee.
+
+11.2 OTM shall provide Licensee with prompt written notice of any claim for
+     which indemnification is sought, provided that failure to provide such
+     notice shall not relieve Licensee of its indemnification obligations except
+     to the extent Licensee is materially prejudiced by such failure.
+
+11.3 OTM shall have the right, at its option and at Licensee's expense, to
+     assume or participate in the defense and control of any matter subject to
+     indemnification by Licensee. Licensee shall not settle any claim without
+     OTM's prior written consent.
+
+
+12. INJUNCTIVE RELIEF
+
+12.1 Licensee acknowledges that any breach or threatened breach of Sections 3,
+     5, 6, 7, or 8 of this Agreement may cause OTM irreparable harm for which
+     monetary damages would be an inadequate remedy.
+
+12.2 Accordingly, in addition to any other remedies available at law or in
+     equity, OTM shall be entitled to seek immediate injunctive relief,
+     specific performance, or other equitable relief from any court of
+     competent jurisdiction, without the requirement of posting a bond or other
+     security, and without the necessity of proving actual damages.
+
+12.3 The exercise of any remedy under this Section 12 shall not be deemed an
+     election of remedies or a waiver of any other remedy available to OTM.
+
+
+13. AUDIT RIGHTS
+
+13.1 OTM reserves the right, upon thirty (30) days' prior written notice, to
+     audit Licensee's use of the Software to verify compliance with this
+     Agreement.
+
+13.2 Licensee shall cooperate fully with any such audit and shall provide OTM
+     or its designated representatives with reasonable access to Licensee's
+     relevant records, systems, and personnel during normal business hours.
+
+13.3 If any audit reveals a material breach of this Agreement, Licensee shall
+     bear all reasonable costs and expenses of the audit and shall promptly
+     cure such breach. OTM's remedies under this Section 13 are in addition
+     to, and not in lieu of, any other remedies available under this Agreement
+     or at law.
+
+
+14. EXPORT COMPLIANCE
+
+14.1 Licensee shall comply with all applicable export control laws, regulations,
+     and sanctions, including but not limited to the Australian Defence Trade
+     Controls Act 2012, the United States Export Administration Regulations
+     (EAR), and any other relevant trade control laws.
+
+14.2 Licensee represents and warrants that it is not: (a) located in, or a
+     national or resident of, any country subject to comprehensive trade
+     sanctions; (b) listed on any government restricted party list; or (c)
+     owned or controlled by any person or entity described in clauses (a) or
+     (b).
+
+
+15. DATA PROTECTION
+
+15.1 The Software does not collect, transmit, or store personal data. The
+     Software operates entirely on the Licensee's local system and does not
+     communicate with any OTM servers or third-party services, except when:
+     (a) performing network connectivity checks to the configured host; and
+     (b) checking for new Software versions via the GitHub API (if the
+     self-update check feature is enabled).
+
+15.2 Network connectivity checks and self-update version checks are performed
+     using standard HTTP requests and do not transmit any personal data,
+     system identifiers, or usage telemetry.
+
+15.3 To the extent that any use of the Software involves the processing of
+     personal data (for example, if the Licensee configures the Software to
+     log information that includes personal data), Licensee shall comply with
+     all applicable data protection and privacy laws, including but not limited
+     to the Australian Privacy Act 1988 (Cth), the General Data Protection
+     Regulation (EU) 2016/679 (GDPR), and any other applicable data protection
+     legislation.
+
+
+16. TERM AND TERMINATION
+
+16.1 This Agreement is effective upon Licensee's first installation of or use of
+     the Software and shall continue until terminated.
+
+16.2 OTM may terminate this Agreement at any time, for any reason or no reason,
+     upon written notice to Licensee.
+
+16.3 This Agreement shall terminate automatically and without notice upon any
+     breach by Licensee of any term or condition hereof.
+
+16.4 Upon termination: (a) all rights granted to Licensee under this Agreement
+     shall immediately cease; (b) Licensee shall immediately cease all use of
+     the Software; (c) Licensee shall promptly destroy or delete all copies
+     of the Software in Licensee's possession or control, including installed
+     copies, backups, and any Derivative Works; and (d) Licensee shall certify
+     in writing to OTM that it has complied with the foregoing obligations.
+
+16.5 Termination of this Agreement shall not relieve Licensee of any obligation
+     or liability accrued prior to the effective date of termination.
+
+16.6 Sections 1, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16.4, 16.5, 16.6, 17,
+     18, 19, 20, 21, 22, 23, 24, and 25 shall survive any termination or
+     expiration of this Agreement.
+
+
+17. GOVERNING LAW AND JURISDICTION
+
+17.1 This Agreement shall be governed by and construed in accordance with the
+     laws of the State of Western Australia and the Commonwealth of Australia,
+     without regard to conflict of laws principles.
+
+17.2 Any dispute, controversy, or claim arising out of or relating to this
+     Agreement, or the breach, termination, or invalidity thereof, shall be
+     subject to the exclusive jurisdiction of the courts of Western Australia,
+     and Licensee irrevocably submits to the personal jurisdiction of such
+     courts and waives any objection to venue therein.
+
+17.3 Notwithstanding the foregoing, OTM may seek injunctive or other equitable
+     relief in any court of competent jurisdiction worldwide to protect its
+     Intellectual Property Rights or Confidential Information.
+
+
+18. CLASS ACTION WAIVER
+
+18.1 TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, LICENSEE AGREES THAT
+     ANY DISPUTE RESOLUTION PROCEEDINGS WILL BE CONDUCTED ONLY ON AN INDIVIDUAL
+     BASIS AND NOT IN A CLASS, CONSOLIDATED, OR REPRESENTATIVE ACTION.
+
+18.2 LICENSEE WAIVES ANY RIGHT TO PARTICIPATE IN A CLASS ACTION LAWSUIT OR
+     CLASS-WIDE ARBITRATION AGAINST OTM.
+
+
+19. STATUTE OF LIMITATIONS
+
+19.1 To the maximum extent permitted by applicable law, any cause of action or
+     claim arising out of or relating to this Agreement or the Software must be
+     commenced within one (1) year after the cause of action accrues; otherwise,
+     such cause of action or claim is permanently barred.
+
+
+20. ASSIGNMENT
+
+20.1 Licensee shall not assign, transfer, delegate, or sublicense any of its
+     rights or obligations under this Agreement, whether by operation of law or
+     otherwise, without OTM's prior written consent. Any attempted assignment
+     without such consent shall be null and void.
+
+20.2 OTM may freely assign or transfer this Agreement or any of its rights or
+     obligations hereunder without restriction and without Licensee's consent.
+
+
+21. FORCE MAJEURE
+
+21.1 Neither party shall be liable for any delay or failure to perform its
+     obligations under this Agreement (other than payment obligations) to the
+     extent that such delay or failure results from events beyond such party's
+     reasonable control, including but not limited to acts of God, natural
+     disasters, epidemics, pandemics, war, terrorism, riots, government actions,
+     power failures, internet or telecommunications failures, or cyberattacks.
+
+
+22. SEVERABILITY
+
+22.1 If any provision of this Agreement is held to be invalid, illegal, or
+     unenforceable by a court of competent jurisdiction, such provision shall
+     be modified to the minimum extent necessary to make it valid, legal, and
+     enforceable, while preserving the original intent of the parties. If such
+     modification is not possible, the invalid provision shall be severed from
+     this Agreement, and the remaining provisions shall continue in full force
+     and effect.
+
+
+23. WAIVER
+
+23.1 No failure or delay by OTM in exercising any right, power, or remedy under
+     this Agreement shall operate as a waiver thereof. No single or partial
+     exercise of any right, power, or remedy shall preclude any further or other
+     exercise thereof or the exercise of any other right, power, or remedy.
+
+23.2 Any waiver of any provision of this Agreement shall be effective only if
+     made in writing and signed by an authorized representative of OTM.
+
+
+24. ENTIRE AGREEMENT
+
+24.1 This Agreement, together with CONTRIBUTING.md, constitutes the entire
+     agreement between the parties with respect to the subject matter hereof
+     and supersedes all prior and contemporaneous agreements, understandings,
+     negotiations, and discussions, whether oral or written.
+
+24.2 No amendment, modification, or supplement to this Agreement shall be valid
+     or binding unless made in writing and signed by an authorized
+     representative of OTM.
+
+
+25. NOTICES
+
+25.1 All notices, requests, consents, and other communications required or
+     permitted under this Agreement shall be in writing and shall be deemed
+     given when: (a) delivered personally; (b) sent by certified or registered
+     mail, return receipt requested; (c) sent by a recognized overnight courier;
+     or (d) sent by email with confirmation of receipt, to the addresses set
+     forth below.
+
+25.2 For OTM:
+     Legal & Compliance Division
+     OFFTRACKMEDIA Studios
+     Email: otmhr.mail@offtrackmediaofficial.com
+
+
+26. THIRD-PARTY BENEFICIARIES
+
+26.1 Except as expressly provided herein, this Agreement does not and is not
+     intended to confer any rights or remedies upon any person or entity other
+     than the parties hereto.
+
+26.2 OTM's affiliates, subsidiaries, officers, directors, employees, and agents
+     are express third-party beneficiaries of Sections 10, 11, and 12 of this
+     Agreement.
+
+
+27. CONSTRUCTION
+
+27.1 The headings in this Agreement are for convenience only and shall not
+     affect the interpretation of this Agreement.
+
+27.2 The terms "include," "includes," and "including" shall be deemed to be
+     followed by the phrase "without limitation."
+
+27.3 This Agreement shall be construed without regard to any presumption or
+     rule requiring construction against the drafting party.
+
+================================================================================
+OFFTRACKMEDIA Studios
+ABN: 84 290 819 896
+"Building Empires, Not Just Brands."
+================================================================================

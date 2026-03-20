@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: EULA & Licensing
+    url: https://github.com/otmof-ops/nudge/blob/master/EULA/OFFTRACKMEDIA_EULA_2025.txt
+    about: Review the OFFTRACKMEDIA EULA before using this software
+  - name: Safety Information
+    url: https://github.com/otmof-ops/nudge/blob/master/docs/SAFETY.md
+    about: Read the safety documentation before using nudge

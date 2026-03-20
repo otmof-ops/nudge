@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# nudge — bash tab completion
+# Copyright (c) 2026 OFFTRACKMEDIA Studios. All rights reserved.
+
+_nudge_completions() {
+    local cur prev
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    # Main flags
+    local flags="--version --help --dry-run --check-only --json --verbose
+                 --history --defer --self-update --config --validate --migrate"
+
+    case "$prev" in
+        --defer)
+            COMPREPLY=($(compgen -W "1h 4h 8h 1d 3d 1w" -- "$cur"))
+            return 0
+            ;;
+        --history)
+            COMPREPLY=($(compgen -W "--json --since 10 20 50 100" -- "$cur"))
+            return 0
+            ;;
+        --since)
+            # Suggest date formats
+            local today
+            today=$(date +%Y-%m-%d)
+            local week_ago
+            week_ago=$(date -d '7 days ago' +%Y-%m-%d 2>/dev/null || echo "")
+            local month_ago
+            month_ago=$(date -d '30 days ago' +%Y-%m-%d 2>/dev/null || echo "")
+            COMPREPLY=($(compgen -W "$today $week_ago $month_ago" -- "$cur"))
+            return 0
+            ;;
+        --config)
+            # Suggest config key names for reference
+            local keys="ENABLED DELAY CHECK_SECURITY AUTO_DISMISS UPDATE_COMMAND
+                        NETWORK_HOST NETWORK_TIMEOUT NETWORK_RETRIES NOTIFICATION_BACKEND
+                        LOG_FILE CONF_VERSION SCHEDULE_MODE SCHEDULE_INTERVAL_HOURS
+                        HISTORY_ENABLED HISTORY_MAX_LINES FLATPAK_ENABLED SNAP_ENABLED
+                        PREVIEW_UPDATES SECURITY_PRIORITY REBOOT_CHECK SNAPSHOT_ENABLED
+                        SNAPSHOT_TOOL SELF_UPDATE_CHECK SELF_UPDATE_CHANNEL OFFLINE_MODE
+                        DEFERRAL_OPTIONS PKGMGR_OVERRIDE DUNST_APPNAME
+                        JSON_OUTPUT LOG_LEVEL BUNNY_PERSONALITY"
+            COMPREPLY=($(compgen -W "$keys" -- "$cur"))
+            return 0
+            ;;
+    esac
+
+    COMPREPLY=($(compgen -W "$flags" -- "$cur"))
+    return 0
+}
+
+complete -F _nudge_completions nudge
+complete -F _nudge_completions nudge.sh

@@ -1,0 +1,58 @@
+name: Validate PR
+
+on:
+  pull_request:
+    branches: [master]
+
+jobs:
+  shellcheck:
+    name: ShellCheck & Syntax Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Run shellcheck on all shell scripts
+        run: |
+          shellcheck nudge.sh setup.sh install.sh uninstall.sh lib/*.sh
+
+      - name: Validate bash syntax
+        run: |
+          bash -n nudge.sh
+          bash -n setup.sh
+          bash -n install.sh
+          bash -n uninstall.sh
+          for f in lib/*.sh; do
+            bash -n "$f"
+          done
+
+      - name: Validate config file format
+        run: |
+          # Validate config uses KEY=VALUE format parseable by nudge's line-by-line parser
+          # (nudge does NOT source the config — it parses line-by-line, so bash -n is misleading)
+          while IFS= read -r line; do
+            line="${line#"${line%%[![:space:]]*}"}"
+            [[ -z "$line" ]] && continue
+            [[ "$line" == \#* ]] && continue
+            if ! [[ "$line" =~ ^[A-Z_]+=.* ]]; then
+              echo "ERROR: Invalid config line: $line" >&2
+              exit 1
+            fi
+          done < nudge.conf
+          echo "Config validation passed"
+
+  test:
+    name: BATS Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install bats-core
+        run: |
+          sudo apt-get install -y bats
+
+      - name: Run tests
+        run: |
+          bats tests/
