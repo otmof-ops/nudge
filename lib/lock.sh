@@ -5,16 +5,20 @@
 
 set -euo pipefail
 
-if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
-    _NUDGE_RUNTIME_DIR=$(mktemp -d "/tmp/nudge-${UID}-XXXXXX")
-else
-    _NUDGE_RUNTIME_DIR="$XDG_RUNTIME_DIR"
-fi
-LOCK_FILE="${_NUDGE_RUNTIME_DIR}/nudge-${UID}.lock"
+_NUDGE_RUNTIME_DIR="${XDG_RUNTIME_DIR:-}"
+LOCK_FILE=""
 LOCK_FD=""
 
 # --- Acquire lock ---
 lock_acquire() {
+    # Lazily create runtime dir only when lock is actually needed
+    if [[ -z "$_NUDGE_RUNTIME_DIR" ]]; then
+        _NUDGE_RUNTIME_DIR=$(mktemp -d "/tmp/nudge-${UID}-XXXXXX") || {
+            log_error "Failed to create lock directory"
+            return 1
+        }
+    fi
+    LOCK_FILE="${_NUDGE_RUNTIME_DIR}/nudge-${UID}.lock"
     exec {LOCK_FD}>"$LOCK_FILE"
     if ! flock -n "$LOCK_FD"; then
         log_warn "Another nudge instance is running"
@@ -30,7 +34,7 @@ lock_release() {
         exec {LOCK_FD}>&- 2>/dev/null || true
         LOCK_FD=""
     fi
-    rm -f "$LOCK_FILE" 2>/dev/null || true
+    [[ -n "$LOCK_FILE" ]] && rm -f "$LOCK_FILE" 2>/dev/null || true
     # Clean up temp runtime directory if we created one
     if [[ "${_NUDGE_RUNTIME_DIR:-}" == /tmp/nudge-* ]]; then
         rmdir "$_NUDGE_RUNTIME_DIR" 2>/dev/null || true

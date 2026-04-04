@@ -136,6 +136,10 @@ safety_snapshot() {
         btrfs)
             local root_subvol
             root_subvol=$(findmnt -n -o SOURCE / 2>/dev/null | head -1)
+            if [[ -z "$root_subvol" ]]; then
+                log_error "Btrfs snapshot failed: could not determine root subvolume"
+                return 1
+            fi
             local snap_path
             snap_path="/snapshots/nudge-$(date +%Y%m%d%H%M%S)"
             sudo btrfs subvolume snapshot "$root_subvol" "$snap_path" 2>/dev/null || {

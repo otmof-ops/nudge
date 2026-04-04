@@ -136,6 +136,11 @@ HELP
         --config)      _CONFIG_CMD=true ;;
         --validate)    _VALIDATE_CMD=true ;;
         --migrate)     _MIGRATE_CMD=true ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            echo "Run 'nudge --help' for usage." >&2
+            exit 10  # EXIT_CONFIG_ERROR — constants not yet available at parse time
+            ;;
     esac
     shift
 done

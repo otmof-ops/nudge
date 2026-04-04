@@ -81,9 +81,15 @@ network_handle_offline() {
             ;;
         queue)
             log_info "Offline mode: queue — flagging for next run"
-            mkdir -p "$NUDGE_STATE_DIR" 2>/dev/null || true
-            { date -Iseconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S'; } \
-                > "$NUDGE_STATE_DIR/pending_check"
+            if mkdir -p "$NUDGE_STATE_DIR" 2>/dev/null; then
+                local _ts _tmp
+                _ts=$(date -Iseconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S')
+                _tmp=$(mktemp "${NUDGE_STATE_DIR}/pending_check.XXXXXX" 2>/dev/null) \
+                    && echo "$_ts" > "$_tmp" \
+                    && mv "$_tmp" "$NUDGE_STATE_DIR/pending_check"
+            else
+                log_warn "Could not create state directory for offline queue"
+            fi
             return "$EXIT_NETWORK_FAIL"
             ;;
         *)

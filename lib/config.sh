@@ -305,7 +305,10 @@ config_migrate() {
 # --- Write config file ---
 config_write() {
     local dest="${1:-$NUDGE_CONFIG_FILE}"
-    mkdir -p "$(dirname "$dest")"
+    mkdir -p "$(dirname "$dest")" || {
+        log_error "Cannot create config directory: $(dirname "$dest")"
+        return 1
+    }
 
     cat > "$dest" << 'HEADER'
 # nudge — configuration

@@ -82,9 +82,12 @@ history_rotate() {
     if [[ "$count" -gt "$max" ]]; then
         local trim=$((count - max))
         local tmp
-        tmp=$(mktemp "${HISTORY_FILE}.XXXXXX")
+        tmp=$(mktemp "${HISTORY_FILE}.XXXXXX" 2>/dev/null) || {
+            log_warn "History rotation skipped: could not create temp file"
+            return 0
+        }
         tail -n "$max" "$HISTORY_FILE" > "$tmp" 2>/dev/null
-        mv "$tmp" "$HISTORY_FILE" 2>/dev/null || true
+        mv "$tmp" "$HISTORY_FILE" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 0; }
         log_debug "History rotated: removed $trim oldest entries"
     fi
 }

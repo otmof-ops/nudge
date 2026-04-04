@@ -208,6 +208,10 @@ _build_upgrade_cmd() {
         dnf)    echo "sudo dnf upgrade -y" ;;
         pacman) echo "sudo pacman -Syu --noconfirm" ;;
         zypper) echo "sudo zypper update -y" ;;
+        *)
+            log_error "No upgrade command for package manager: ${DETECTED_PKGMGR:-unset}"
+            return 1
+            ;;
     esac
 }
 
@@ -221,8 +225,10 @@ _detect_terminal() {
         echo "xfce4-terminal"
     elif command -v x-terminal-emulator &>/dev/null; then
         echo "x-terminal-emulator"
-    else
+    elif command -v xterm &>/dev/null; then
         echo "xterm"
+    else
+        echo "none"
     fi
 }
 
@@ -232,6 +238,11 @@ pkgmgr_upgrade() {
     cmd=$(_build_upgrade_cmd)
     local term
     term=$(_detect_terminal)
+
+    if [[ "$term" == "none" ]]; then
+        log_error "No terminal emulator found (install konsole, gnome-terminal, xfce4-terminal, or xterm)"
+        return 1
+    fi
 
     log_info "Running upgrade: $cmd (terminal: $term)"
 
@@ -243,10 +254,10 @@ pkgmgr_upgrade() {
             gnome-terminal --wait -- bash -c "$cmd; echo; echo 'Press Enter to close.'; read -r"
             ;;
         xfce4-terminal)
-            xfce4-terminal --hold -e bash -c "$cmd"
+            xfce4-terminal --hold -e "bash -c \"$cmd\""
             ;;
         *)
-            $term -e bash -c "$cmd; echo; echo 'Press Enter to close.'; read -r"
+            "$term" -e bash -c "$cmd; echo; echo 'Press Enter to close.'; read -r"
             ;;
     esac
     return $?
