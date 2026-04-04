@@ -64,18 +64,16 @@ _prompt_kdialog() {
     local args=(--icon system-software-update --title "System Updates Available")
     args+=(--yesnocancel "$msg\n\nUpdate Now / Remind Me Later / Not Now")
 
-    local rc
+    local rc=0
     if [[ "$dismiss" -gt 0 ]]; then
-        timeout "$dismiss" kdialog "${args[@]}" 2>/dev/null && true
-        rc=$?
+        if timeout "$dismiss" kdialog "${args[@]}" 2>/dev/null; then rc=0; else rc=$?; fi
         if [[ "$rc" -eq 124 ]]; then
             log_info "Dialog auto-dismissed after ${dismiss}s"
             NOTIFY_RESPONSE="declined"
             return 0
         fi
     else
-        kdialog "${args[@]}" 2>/dev/null && true
-        rc=$?
+        if kdialog "${args[@]}" 2>/dev/null; then rc=0; else rc=$?; fi
     fi
 
     case "$rc" in
@@ -100,14 +98,14 @@ _prompt_zenity() {
     [[ "$dismiss" -gt 0 ]] && timeout_arg=("--timeout=$dismiss")
 
     local zen_output
-    zen_output=$(zenity --question --icon-name=system-software-update \
+    local rc=0
+    if zen_output=$(zenity --question --icon-name=system-software-update \
         --title="System Updates Available" \
         --text="$(echo -e "$msg")" \
         --ok-label="Update Now" \
         --cancel-label="Not Now" \
         --extra-button="Remind Me Later" \
-        "${timeout_arg[@]}" 2>/dev/null) && true
-    local rc=$?
+        "${timeout_arg[@]}" 2>/dev/null); then rc=0; else rc=$?; fi
 
     # zenity returns the extra-button label on stdout (exit code 1)
     if [[ "$zen_output" == "Remind Me Later" ]]; then

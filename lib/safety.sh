@@ -73,7 +73,9 @@ safety_handle_reboot() {
         # Show reboot dialog
         if notify_reboot; then
             log_info "User accepted reboot"
-            systemctl reboot 2>/dev/null || sudo reboot 2>/dev/null || true
+            if ! systemctl reboot 2>/dev/null && ! sudo reboot 2>/dev/null; then
+                log_error "Failed to initiate reboot — insufficient permissions"
+            fi
         else
             log_info "User declined reboot — flagged as pending"
         fi
@@ -125,7 +127,8 @@ safety_snapshot() {
                 log_error "Timeshift snapshot failed"
                 return 1
             }
-            snapshot_id=$(echo "$output" | grep -oP 'Tagged snapshot.*: \K.*' || echo "timeshift-$(date +%s)")
+            snapshot_id=$(echo "$output" | sed -n 's/.*Tagged snapshot[^:]*: //p' | head -1)
+            snapshot_id="${snapshot_id:-timeshift-$(date +%s)}"
             ;;
         snapper)
             snapshot_id=$(sudo snapper create -d "nudge pre-upgrade" --print-number 2>/dev/null) || {

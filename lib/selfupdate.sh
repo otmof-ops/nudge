@@ -207,9 +207,9 @@ selfupdate_install() {
     fi
     local checksums_file="$tmpdir/SHA256SUMS"
     if command -v curl &>/dev/null; then
-        curl -sfL -o "$checksums_file" "$checksum_url" 2>/dev/null
+        curl -sfL -o "$checksums_file" "$checksum_url" 2>/dev/null || true
     elif command -v wget &>/dev/null; then
-        wget -q -O "$checksums_file" "$checksum_url" 2>/dev/null
+        wget -q -O "$checksums_file" "$checksum_url" 2>/dev/null || true
     fi
     if [[ ! -s "$checksums_file" ]]; then
         echo "Error: Could not download SHA256 checksums. Aborting for safety."

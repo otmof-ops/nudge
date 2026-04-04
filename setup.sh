@@ -13,7 +13,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # --- Bootstrap: piped execution fallback ---
 if [[ ! -d "$SCRIPT_DIR/lib" ]]; then
     _SETUP_TMPDIR=$(mktemp -d)
-    trap 'rm -rf "$_SETUP_TMPDIR"' EXIT
     echo "Downloading nudge..."
     if command -v git &>/dev/null; then
         git clone --depth 1 https://github.com/otmof-ops/nudge.git "$_SETUP_TMPDIR/nudge" 2>/dev/null
@@ -22,9 +21,11 @@ if [[ ! -d "$SCRIPT_DIR/lib" ]]; then
         mv "$_SETUP_TMPDIR"/nudge-* "$_SETUP_TMPDIR/nudge"
     else
         echo "Error: git or curl required for remote install" >&2
+        rm -rf "$_SETUP_TMPDIR"
         exit 4
     fi
-    exec bash "$_SETUP_TMPDIR/nudge/setup.sh" "$@"
+    # Pass tmpdir to child for cleanup; don't trap EXIT here (exec replaces this process)
+    exec bash "$_SETUP_TMPDIR/nudge/setup.sh" --_bootstrap-tmpdir="$_SETUP_TMPDIR" "$@"
 fi
 
 # --- Source libraries ---
@@ -47,6 +48,7 @@ _AUTOSTART_METHOD="auto"
 _IS_REINSTALL=false
 _CONFIGURE_RETURN="MAIN_MENU"
 _RUN_AFTER_INSTALL=false
+_BOOTSTRAP_TMPDIR=""
 _STATE="MAIN_MENU"
 
 # --- Exit codes ---
@@ -73,6 +75,7 @@ for arg in "$@"; do
         --systemd)       _AUTOSTART_METHOD="systemd" ;;
         --xdg)           _AUTOSTART_METHOD="xdg" ;;
         --prefix=*)      _PREFIX="${arg#--prefix=}" ;;
+        --_bootstrap-tmpdir=*) _BOOTSTRAP_TMPDIR="${arg#--_bootstrap-tmpdir=}" ;;
         --yes|-y)        _UNATTENDED=true ;;
         --version)
             echo "nudge setup $VERSION"
@@ -1281,6 +1284,11 @@ _cli_dispatch() {
 # ========================================================
 
 main() {
+    # Clean up bootstrap tmpdir from piped execution
+    if [[ -n "$_BOOTSTRAP_TMPDIR" ]] && [[ -d "$_BOOTSTRAP_TMPDIR" ]]; then
+        trap 'rm -rf "$_BOOTSTRAP_TMPDIR"' EXIT
+    fi
+
     if [[ -n "$_MODE" ]]; then
         if _cli_dispatch; then
             exit "$_EXIT_OK"

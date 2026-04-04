@@ -160,14 +160,21 @@ if [[ "$_HISTORY_CMD" == "true" ]]; then
 fi
 
 if [[ "$_SELF_UPDATE_CMD" == "true" ]]; then
-    selfupdate_install
-    exit $?
+    if selfupdate_install; then
+        exit "$EXIT_OK"
+    else
+        exit "$EXIT_CONFIG_ERROR"
+    fi
 fi
 
 if [[ -n "$_DEFER_CMD" ]]; then
-    schedule_defer "$_DEFER_CMD"
-    echo "Next check deferred for $_DEFER_CMD"
-    exit "$EXIT_DEFERRED"
+    if schedule_defer "$_DEFER_CMD"; then
+        echo "Next check deferred for $_DEFER_CMD"
+        exit "$EXIT_DEFERRED"
+    else
+        echo "Invalid defer duration: $_DEFER_CMD (expected: 1h, 4h, 1d, 1w)" >&2
+        exit "$EXIT_CONFIG_ERROR"
+    fi
 fi
 
 if [[ "$_CONFIG_CMD" == "true" ]]; then
@@ -206,9 +213,13 @@ _finalize() {
 
 # --- Signal handling ---
 CLEANUP_PIDS=()
+_CLEANUP_DONE=false
 
 # shellcheck disable=SC2317  # _cleanup is invoked via trap, not directly
 _cleanup() {
+    [[ "$_CLEANUP_DONE" == "true" ]] && return
+    _CLEANUP_DONE=true
+
     local sig="${1:-EXIT}"
     for pid in "${CLEANUP_PIDS[@]}"; do
         kill "$pid" 2>/dev/null || true
@@ -260,7 +271,7 @@ fi
 
 # --- Delay (skip for dry-run and check-only) ---
 if [[ "$DRY_RUN" != "true" ]] && [[ "$CHECK_ONLY" != "true" ]]; then
-    if [[ "${DELAY:-0}" -gt 0 ]]; then
+    if [[ "${DELAY:-0}" =~ ^[0-9]+$ ]] && [[ "${DELAY:-0}" -gt 0 ]]; then
         log_info "Waiting ${DELAY}s before checking for updates"
         sleep "$DELAY"
     fi
