@@ -27,7 +27,7 @@ jobs:
             share/bash-completion/nudge share/man/nudge.1 \
             lib/output.sh lib/config.sh lib/lock.sh lib/network.sh \
             lib/pkgmgr.sh lib/notify.sh lib/schedule.sh lib/history.sh \
-            lib/safety.sh lib/selfupdate.sh lib/tui.sh \
+            lib/safety.sh lib/selfupdate.sh lib/errorreport.sh lib/tui.sh \
             lib/bunny.sh lib/bunny-poses.sh lib/bunny-dialogue.sh \
             > SHA256SUMS
 
@@ -57,6 +57,7 @@ jobs:
             lib/history.sh
             lib/safety.sh
             lib/selfupdate.sh
+            lib/errorreport.sh
             lib/tui.sh
             lib/bunny.sh
             lib/bunny-poses.sh

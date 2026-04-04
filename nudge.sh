@@ -46,6 +46,8 @@ source "$NUDGE_LIB_DIR/history.sh"
 source "$NUDGE_LIB_DIR/safety.sh"
 # shellcheck source=lib/selfupdate.sh
 source "$NUDGE_LIB_DIR/selfupdate.sh"
+# shellcheck source=lib/errorreport.sh
+source "$NUDGE_LIB_DIR/errorreport.sh"
 # shellcheck source=lib/tui.sh
 source "$NUDGE_LIB_DIR/tui.sh"
 # shellcheck source=lib/bunny-poses.sh
@@ -71,6 +73,9 @@ _SELF_UPDATE_CMD=false
 _CONFIG_CMD=false
 _VALIDATE_CMD=false
 _MIGRATE_CMD=false
+_REPORT_CMD=false
+_REPORT_FILE_CMD=false
+_REPORT_CLEAR_CMD=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -102,6 +107,9 @@ Options:
   --config               Print current resolved configuration
   --validate             Validate config and exit
   --migrate              Run config migration manually
+  --report               Show crash reports
+  --report --file        File latest crash report as GitHub issue
+  --report --clear       Clear all crash reports
 
 Environment:
   XDG_CONFIG_HOME        Config directory (default: ~/.config)
@@ -136,6 +144,9 @@ HELP
         --config)      _CONFIG_CMD=true ;;
         --validate)    _VALIDATE_CMD=true ;;
         --migrate)     _MIGRATE_CMD=true ;;
+        --report)      _REPORT_CMD=true ;;
+        --file)        _REPORT_FILE_CMD=true ;;
+        --clear)       _REPORT_CLEAR_CMD=true ;;
         -*)
             echo "Unknown option: $1" >&2
             echo "Run 'nudge --help' for usage." >&2
@@ -198,6 +209,19 @@ if [[ "$_MIGRATE_CMD" == "true" ]]; then
     exit "$EXIT_OK"
 fi
 
+if [[ "$_REPORT_CMD" == "true" ]]; then
+    if [[ "$_REPORT_CLEAR_CMD" == "true" ]]; then
+        errorreport_clear
+    elif [[ "$_REPORT_FILE_CMD" == "true" ]]; then
+        errorreport_file_issue
+    elif [[ "$_JSON_FLAG" == "true" ]]; then
+        errorreport_list 20 "json"
+    else
+        errorreport_list 20 "table"
+    fi
+    exit "$EXIT_OK"
+fi
+
 # --- Disabled check ---
 if [[ "$ENABLED" != "true" ]]; then
     log_info "nudge is disabled"
@@ -209,6 +233,14 @@ _finalize() {
     local end_time
     end_time=$(date +%s)
     json_set "duration_seconds" "$(( end_time - _NUDGE_START_TIME ))"
+}
+
+# --- Error exit with crash report ---
+_exit_error() {
+    local exit_code="$1"
+    local context="${2:-}"
+    errorreport_write "$exit_code" "$context" 2>/dev/null || true
+    exit "$exit_code"
 }
 
 # --- Signal handling ---
@@ -229,9 +261,10 @@ _cleanup() {
     # Calculate duration
     _finalize
 
-    # Write history on non-EXIT signals
+    # Write history and crash report on non-EXIT signals
     if [[ "$sig" != "EXIT" ]]; then
         history_write "CANCELLED" "Signal: $sig" "$EXIT_INTERRUPTED"
+        errorreport_write "$EXIT_INTERRUPTED" "Signal: $sig" 2>/dev/null || true
     fi
 
     lock_release
@@ -246,7 +279,7 @@ trap '_cleanup HUP;  exit "$EXIT_INTERRUPTED"' HUP
 if [[ "$CHECK_ONLY" != "true" ]]; then
     if ! lock_acquire; then
         json_emit "$EXIT_ALREADY_RUNNING"
-        exit "$EXIT_ALREADY_RUNNING"
+        _exit_error "$EXIT_ALREADY_RUNNING" "Another nudge instance is running"
     fi
 fi
 
@@ -282,21 +315,21 @@ if ! network_check; then
     network_handle_offline
     _NETWORK_RC=$?
     json_emit "$_NETWORK_RC"
-    exit "$_NETWORK_RC"
+    _exit_error "$_NETWORK_RC" "Network check failed (mode: ${OFFLINE_MODE:-skip})"
 fi
 
 # --- Detect package manager ---
 if ! pkgmgr_detect; then
     log_error "No supported package manager found"
     json_emit "$EXIT_CONFIG_ERROR"
-    exit "$EXIT_CONFIG_ERROR"
+    _exit_error "$EXIT_CONFIG_ERROR" "No supported package manager found"
 fi
 json_set "pkg_manager" "$DETECTED_PKGMGR"
 
 # --- Package manager lock check ---
 if ! pkgmgr_lock_check; then
     json_emit "$EXIT_PKG_LOCK"
-    exit "$EXIT_PKG_LOCK"
+    _exit_error "$EXIT_PKG_LOCK" "Package manager locked by another process"
 fi
 
 # --- Count updates (system + flatpak + snap) ---
@@ -406,14 +439,14 @@ if [[ "$NOTIFY_BACKEND" == "none" ]]; then
     log_error "No notification backend available"
     json_emit "$EXIT_NO_BACKEND"
     history_write "NO_BACKEND" "" "$EXIT_NO_BACKEND"
-    exit "$EXIT_NO_BACKEND"
+    _exit_error "$EXIT_NO_BACKEND" "No notification backend (install kdialog, zenity, or dunst)"
 fi
 
 # --- Show prompt ---
 if ! notify_prompt "$MSG" "$PREVIEW_TEXT"; then
     json_emit "$EXIT_NO_BACKEND"
-    history_write "NO_BACKEND" "" "$EXIT_NO_BACKEND"
-    exit "$EXIT_NO_BACKEND"
+    history_write "PROMPT_FAILED" "notify_prompt returned non-zero" "$EXIT_NO_BACKEND"
+    _exit_error "$EXIT_NO_BACKEND" "Notification prompt failed (backend: ${NOTIFY_BACKEND:-none})"
 fi
 
 # --- Handle response ---
@@ -428,7 +461,7 @@ case "$NOTIFY_RESPONSE" in
                 log_error "Snapshot failed — aborting upgrade"
                 json_emit "$EXIT_SNAPSHOT_FAILED"
                 history_write "SNAPSHOT_FAILED" "" "$EXIT_SNAPSHOT_FAILED"
-                exit "$EXIT_SNAPSHOT_FAILED"
+                _exit_error "$EXIT_SNAPSHOT_FAILED" "Pre-upgrade snapshot failed (tool: ${SNAPSHOT_TOOL:-auto})"
             fi
         fi
 
@@ -452,7 +485,7 @@ case "$NOTIFY_RESPONSE" in
             _finalize
             json_emit "$EXIT_UPDATES_FAILED"
             history_write "FAILED" "Upgrade command returned non-zero" "$EXIT_UPDATES_FAILED"
-            exit "$EXIT_UPDATES_FAILED"
+            _exit_error "$EXIT_UPDATES_FAILED" "System upgrade failed (pkg_manager: ${DETECTED_PKGMGR:-unknown})"
         fi
         ;;
 
