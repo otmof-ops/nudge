@@ -181,63 +181,7 @@ selfupdate_install() {
         }
     fi
 
-    # Check SHA256 (mandatory)
-    local checksum_url
-    checksum_url=$(echo "$response" | grep -oE '"browser_download_url":[[:space:]]*"[^"]*SHA256[^"]*"' | head -1 | sed 's/.*"browser_download_url":[[:space:]]*"\([^"]*\)".*/\1/')
-    if [[ -z "$checksum_url" ]]; then
-        echo "Error: No SHA256 checksum found in release. Aborting for safety."
-        rm -rf "$tmpdir"
-        return 1
-    fi
-    local expected_hash
-    if command -v curl &>/dev/null; then
-        expected_hash=$(curl -sfL "$checksum_url" 2>/dev/null | awk '{print $1}')
-    elif command -v wget &>/dev/null; then
-        expected_hash=$(wget -q -O- "$checksum_url" 2>/dev/null | awk '{print $1}')
-    fi
-    if [[ -z "$expected_hash" ]]; then
-        echo "Error: Could not download SHA256 checksum. Aborting for safety."
-        rm -rf "$tmpdir"
-        return 1
-    fi
-    local actual_hash
-    actual_hash=$(sha256sum "$tarball" | awk '{print $1}')
-    if [[ "$actual_hash" != "$expected_hash" ]]; then
-        echo "Error: Checksum mismatch! Aborting."
-        echo "  Expected: $expected_hash"
-        echo "  Got:      $actual_hash"
-        rm -rf "$tmpdir"
-        return 1
-    fi
-    echo "SHA256 checksum verified."
-
-    # GPG signature verification (if gpg available and .asc signature exists)
-    local sig_url
-    sig_url=$(echo "$response" | grep -oE '"browser_download_url":[[:space:]]*"[^"]*\.asc"' | head -1 | sed 's/.*"browser_download_url":[[:space:]]*"\([^"]*\)".*/\1/')
-    if [[ -n "$sig_url" ]] && command -v gpg &>/dev/null; then
-        local sig_file="$tmpdir/SHA256SUMS.asc"
-        local checksum_file="$tmpdir/SHA256SUMS"
-        echo "$expected_hash  $(basename "$tarball")" > "$checksum_file"
-        if command -v curl &>/dev/null; then
-            curl -sL -o "$sig_file" "$sig_url" 2>/dev/null
-        elif command -v wget &>/dev/null; then
-            wget -q -O "$sig_file" "$sig_url" 2>/dev/null
-        fi
-        if [[ -f "$sig_file" ]]; then
-            if gpg --verify "$sig_file" "$checksum_file" 2>/dev/null; then
-                echo "GPG signature verified."
-            else
-                echo "Error: GPG signature verification failed! Aborting."
-                rm -rf "$tmpdir"
-                return 1
-            fi
-        fi
-    elif [[ -n "$sig_url" ]] && ! command -v gpg &>/dev/null; then
-        echo "Warning: GPG signature available but gpg not installed. Skipping signature verification."
-        echo "  Install gnupg for enhanced security: sudo apt install gnupg"
-    fi
-
-    # Extract and install
+    # Extract tarball
     tar xzf "$tarball" -C "$tmpdir" 2>/dev/null || {
         echo "Error: Extraction failed"
         rm -rf "$tmpdir"
@@ -251,6 +195,82 @@ selfupdate_install() {
         echo "Error: Invalid release archive"
         rm -rf "$tmpdir"
         return 1
+    fi
+
+    # Verify extracted files against SHA256SUMS (mandatory)
+    local checksum_url
+    checksum_url=$(echo "$response" | grep -oE '"browser_download_url":[[:space:]]*"[^"]*SHA256[^"]*"' | head -1 | sed 's/.*"browser_download_url":[[:space:]]*"\([^"]*\)".*/\1/')
+    if [[ -z "$checksum_url" ]]; then
+        echo "Error: No SHA256 checksum found in release. Aborting for safety."
+        rm -rf "$tmpdir"
+        return 1
+    fi
+    local checksums_file="$tmpdir/SHA256SUMS"
+    if command -v curl &>/dev/null; then
+        curl -sfL -o "$checksums_file" "$checksum_url" 2>/dev/null
+    elif command -v wget &>/dev/null; then
+        wget -q -O "$checksums_file" "$checksum_url" 2>/dev/null
+    fi
+    if [[ ! -s "$checksums_file" ]]; then
+        echo "Error: Could not download SHA256 checksums. Aborting for safety."
+        rm -rf "$tmpdir"
+        return 1
+    fi
+    # Verify extracted files against release checksums
+    local verify_failed=false
+    local verify_count=0
+    while IFS= read -r line; do
+        local expected_hash file_path
+        expected_hash=$(echo "$line" | awk '{print $1}')
+        file_path=$(echo "$line" | awk '{print $2}')
+        [[ -z "$expected_hash" || -z "$file_path" ]] && continue
+        local check_path="$extract_dir/$file_path"
+        if [[ -f "$check_path" ]]; then
+            local actual_hash
+            actual_hash=$(sha256sum "$check_path" | awk '{print $1}')
+            if [[ "$actual_hash" != "$expected_hash" ]]; then
+                echo "Error: Checksum mismatch for $file_path"
+                echo "  Expected: $expected_hash"
+                echo "  Got:      $actual_hash"
+                verify_failed=true
+            fi
+            verify_count=$((verify_count + 1))
+        fi
+    done < "$checksums_file"
+    if [[ "$verify_failed" == "true" ]]; then
+        echo "Error: Integrity verification failed. Aborting."
+        rm -rf "$tmpdir"
+        return 1
+    fi
+    if [[ "$verify_count" -eq 0 ]]; then
+        echo "Error: No files could be verified against checksums. Aborting."
+        rm -rf "$tmpdir"
+        return 1
+    fi
+    echo "SHA256 checksums verified ($verify_count files)."
+
+    # GPG signature verification (if gpg available and .asc signature exists)
+    local sig_url
+    sig_url=$(echo "$response" | grep -oE '"browser_download_url":[[:space:]]*"[^"]*\.asc"' | head -1 | sed 's/.*"browser_download_url":[[:space:]]*"\([^"]*\)".*/\1/')
+    if [[ -n "$sig_url" ]] && command -v gpg &>/dev/null; then
+        local sig_file="$tmpdir/SHA256SUMS.asc"
+        if command -v curl &>/dev/null; then
+            curl -sL -o "$sig_file" "$sig_url" 2>/dev/null
+        elif command -v wget &>/dev/null; then
+            wget -q -O "$sig_file" "$sig_url" 2>/dev/null
+        fi
+        if [[ -f "$sig_file" ]]; then
+            if gpg --verify "$sig_file" "$checksums_file" 2>/dev/null; then
+                echo "GPG signature verified."
+            else
+                echo "Error: GPG signature verification failed! Aborting."
+                rm -rf "$tmpdir"
+                return 1
+            fi
+        fi
+    elif [[ -n "$sig_url" ]] && ! command -v gpg &>/dev/null; then
+        echo "Warning: GPG signature available but gpg not installed. Skipping signature verification."
+        echo "  Install gnupg for enhanced security: sudo apt install gnupg"
     fi
 
     echo "Installing v$latest_version..."
