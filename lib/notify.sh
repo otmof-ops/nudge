@@ -11,25 +11,46 @@ NOTIFY_BACKEND=""
 # Dialog response: accepted, declined, deferred
 NOTIFY_RESPONSE=""
 
+# --- Check if a display server is available ---
+_has_display() {
+    [[ -n "${DISPLAY:-}" ]] || [[ -n "${WAYLAND_DISPLAY:-}" ]]
+}
+
 # --- Detect best available backend ---
 notify_detect() {
     if [[ "${NOTIFICATION_BACKEND:-auto}" != "auto" ]]; then
-        NOTIFY_BACKEND="$NOTIFICATION_BACKEND"
-        log_info "Notification backend (config): $NOTIFY_BACKEND"
-        return 0
+        if [[ "$NOTIFICATION_BACKEND" != "none" ]] && ! command -v "$NOTIFICATION_BACKEND" &>/dev/null; then
+            log_warn "Configured backend '$NOTIFICATION_BACKEND' not found, falling back to auto-detect"
+        else
+            NOTIFY_BACKEND="$NOTIFICATION_BACKEND"
+            log_info "Notification backend (config): $NOTIFY_BACKEND"
+            return 0
+        fi
     fi
 
-    if command -v dunstify &>/dev/null; then
-        NOTIFY_BACKEND="dunstify"
-    elif command -v kdialog &>/dev/null; then
-        NOTIFY_BACKEND="kdialog"
-    elif command -v zenity &>/dev/null; then
-        NOTIFY_BACKEND="zenity"
-    elif command -v gdbus &>/dev/null; then
-        NOTIFY_BACKEND="gdbus"
-    elif command -v notify-send &>/dev/null; then
-        NOTIFY_BACKEND="notify-send"
+    # GUI backends require a display server
+    if _has_display; then
+        if command -v dunstify &>/dev/null && pgrep -x dunst &>/dev/null; then
+            NOTIFY_BACKEND="dunstify"
+        elif command -v kdialog &>/dev/null && [[ -n "${KDE_SESSION_VERSION:-}" ]]; then
+            NOTIFY_BACKEND="kdialog"
+        elif command -v zenity &>/dev/null; then
+            NOTIFY_BACKEND="zenity"
+        elif command -v kdialog &>/dev/null; then
+            # kdialog outside KDE — still usable, just not preferred
+            NOTIFY_BACKEND="kdialog"
+        elif command -v dunstify &>/dev/null; then
+            # dunst binary exists but daemon not running — still try
+            NOTIFY_BACKEND="dunstify"
+        elif command -v gdbus &>/dev/null; then
+            NOTIFY_BACKEND="gdbus"
+        elif command -v notify-send &>/dev/null; then
+            NOTIFY_BACKEND="notify-send"
+        else
+            NOTIFY_BACKEND="none"
+        fi
     else
+        log_warn "No display server detected (DISPLAY/WAYLAND_DISPLAY unset)"
         NOTIFY_BACKEND="none"
     fi
 

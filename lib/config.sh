@@ -49,6 +49,8 @@ declare -gA CONFIG_DEFAULTS=(
     [JSON_OUTPUT]="false"
     [LOG_LEVEL]="info"
     [BUNNY_PERSONALITY]="disney"
+    [TERMINAL_EMULATOR]="auto"
+    [CRITICAL_PACKAGES_EXTRA]=""
 )
 
 # --- Type declarations ---
@@ -84,6 +86,8 @@ declare -gA CONFIG_TYPES=(
     [JSON_OUTPUT]="bool"
     [LOG_LEVEL]="enum:debug,info,warn,error"
     [BUNNY_PERSONALITY]="enum:classic,disney"
+    [TERMINAL_EMULATOR]="string"
+    [CRITICAL_PACKAGES_EXTRA]="string"
 )
 
 # --- Validate a single key/value pair ---
@@ -395,6 +399,14 @@ HEADER
     printf 'SELF_UPDATE_CHECK=%s\n' "${SELF_UPDATE_CHECK:-true}"
     printf '\n# Release channel: stable, beta\n'
     printf 'SELF_UPDATE_CHANNEL="%s"\n' "${SELF_UPDATE_CHANNEL:-stable}"
+
+    printf '\n# --- Terminal Settings ---\n'
+    printf '\n# Terminal emulator for upgrade commands (auto = detect)\n'
+    printf 'TERMINAL_EMULATOR="%s"\n' "${TERMINAL_EMULATOR:-auto}"
+
+    printf '\n# --- Security Classification ---\n'
+    printf '\n# Extra package names to classify as CRITICAL (pipe-separated)\n'
+    printf 'CRITICAL_PACKAGES_EXTRA="%s"\n' "${CRITICAL_PACKAGES_EXTRA:-}"
 
     printf '\n# --- Personality Settings ---\n'
     printf '\n# Bunny personality voice: classic (neutral), disney (Thumper baby voice)\n'

@@ -46,6 +46,13 @@ selfupdate_check_due() {
     last=$(cat "$SELFUPDATE_STATE_FILE" 2>/dev/null || true)
     [[ -z "$last" ]] && return 0
 
+    # Validate timestamp format — corrupt state files should not bypass rate limit
+    if [[ ! "$last" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
+        log_warn "Corrupt selfupdate state file — resetting"
+        selfupdate_mark_checked
+        return 1
+    fi
+
     local last_epoch now_epoch elapsed
     last_epoch=$(date -d "$last" +%s 2>/dev/null || echo 0)
     now_epoch=$(date +%s)
@@ -98,7 +105,7 @@ selfupdate_check() {
     if [[ "$channel" == "stable" ]]; then
         latest_version=$(echo "$response" | grep -oE '"tag_name":[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"tag_name":[[:space:]]*"v\{0,1\}\([^"]*\)".*/\1/')
     else
-        # Get first non-prerelease, or first release for beta
+        # Beta channel: include prereleases — grab the newest tag from the array
         latest_version=$(echo "$response" | grep -oE '"tag_name":[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"tag_name":[[:space:]]*"v\{0,1\}\([^"]*\)".*/\1/')
     fi
 

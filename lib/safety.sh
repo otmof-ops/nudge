@@ -19,7 +19,9 @@ safety_reboot_check() {
 
     # Debian/Ubuntu: needrestart (if available)
     if command -v needrestart &>/dev/null; then
-        if needrestart -b 2>/dev/null | grep -q 'NEEDRESTART-KSTA: 3'; then
+        local nr_output
+        nr_output=$(needrestart -b 2>/dev/null) || true
+        if echo "$nr_output" | grep -q 'NEEDRESTART-KSTA: 3'; then
             log_info "Reboot required (detected via needrestart)"
             return 0
         fi

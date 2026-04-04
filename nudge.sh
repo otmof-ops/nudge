@@ -298,6 +298,11 @@ if safety_check_pending_reboot; then
         notify_detect
         if notify_reboot; then
             systemctl reboot 2>/dev/null || sudo reboot 2>/dev/null || true
+        else
+            _finalize
+            json_emit "$EXIT_REBOOT_PENDING"
+            history_write "REBOOT_PENDING" "User declined reboot" "$EXIT_REBOOT_PENDING"
+            exit "$EXIT_REBOOT_PENDING"
         fi
     fi
 fi
@@ -470,15 +475,16 @@ case "$NOTIFY_RESPONSE" in
             log_info "System upgrade completed"
 
             # Flatpak + Snap upgrades
-            flatpak_upgrade
-            snap_upgrade
+            _extra_failures=""
+            flatpak_upgrade || _extra_failures+=" flatpak"
+            snap_upgrade || _extra_failures+=" snap"
 
             # Reboot detection
             safety_handle_reboot
 
             _finalize
             json_emit "$EXIT_UPDATES_APPLIED"
-            history_write "APPLIED" "" "$EXIT_UPDATES_APPLIED"
+            history_write "APPLIED" "${_extra_failures:+Partial failures:$_extra_failures}" "$EXIT_UPDATES_APPLIED"
             exit "$EXIT_UPDATES_APPLIED"
         else
             log_error "System upgrade failed"

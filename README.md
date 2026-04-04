@@ -9,7 +9,7 @@
 [![ShellCheck](https://github.com/otmof-ops/nudge/actions/workflows/validate-pr.yml/badge.svg)](https://github.com/otmof-ops/nudge/actions/workflows/validate-pr.yml)
 [![Latest Release](https://img.shields.io/github/v/release/otmof-ops/nudge?label=release)](https://github.com/otmof-ops/nudge/releases)
 [![License](https://img.shields.io/badge/license-Proprietary-red)](EULA/OFFTRACKMEDIA_EULA_2025.txt)
-[![Tests](https://img.shields.io/badge/tests-309%20passing-brightgreen)](tests/)
+[![Tests](https://img.shields.io/badge/tests-332%20passing-brightgreen)](tests/)
 [![Language](https://img.shields.io/badge/language-bash-blue)](nudge.sh)
 [![Distros](https://img.shields.io/badge/distros-4%20supported-blue)](docs/STANDARDS.md)
 
@@ -90,7 +90,7 @@ write history → exit with named code
 
 ## Architecture
 
-nudge v2.0.0 uses a modular library design — the main script is a ~466-line dispatcher that sources 14 modules from `lib/`:
+nudge v2.0.0 uses a modular library design — the main script is a ~480-line dispatcher that sources 15 modules from `lib/`:
 
 | Module | Purpose |
 |--------|---------|
@@ -104,6 +104,7 @@ nudge v2.0.0 uses a modular library design — the main script is a ~466-line di
 | `lib/history.sh` | JSONL history log and viewer |
 | `lib/safety.sh` | Pre-upgrade snapshots, reboot detection |
 | `lib/selfupdate.sh` | GitHub release self-update check |
+| `lib/errorreport.sh` | Crash reports and automated GitHub issue filing |
 | `lib/tui.sh` | TUI rendering primitives — bunny, menus, colors |
 | `lib/bunny-poses.sh` | 10 ASCII art pose functions |
 | `lib/bunny-dialogue.sh` | 100+ rotating dialogue messages, random picker |
@@ -322,6 +323,9 @@ nudge --defer 4h             # Defer next check
 nudge --self-update          # Download latest version
 nudge --config               # Print resolved config
 nudge --validate             # Validate config
+nudge --report               # Show crash reports
+nudge --report --file        # File latest crash as GitHub issue
+nudge --report --clear       # Clear all crash reports
 nudge --migrate              # Run config migration
 ```
 
@@ -450,10 +454,10 @@ Contributions are welcome. See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for the C
 
 | Metric | Value |
 |--------|-------|
-| Test suite | 309 tests across 15 files |
-| Library modules | 14 modular `.sh` files |
+| Test suite | 332+ tests across 16 files |
+| Library modules | 15 modular `.sh` files |
 | Named exit codes | 13 scriptable exit codes |
-| Config keys | 31 validated keys |
+| Config keys | 33 validated keys |
 | Notification backends | 5 with auto-detection |
 | Package managers | 4 + Flatpak + Snap |
 | Bunny poses | 10 ASCII art poses |

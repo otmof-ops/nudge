@@ -89,12 +89,11 @@ teardown() {
 
     # Build set of keys from CONFIG_CATEGORIES in setup.sh
     local cat_keys=""
-    cat_keys=$(grep -oP '\[(?:core|notification|network|schedule|packages|safety|updates|logging)\]="[^"]*"' "$SETUP" | \
+    cat_keys=$(grep -oP '\[(?:core|notification|network|schedule|packages|safety|updates|logging|terminal)\]="[^"]*"' "$SETUP" | \
                grep -oP '"[^"]*"' | tr '"' ' ')
 
-    # Every CONFIG_DEFAULTS key (except CONF_VERSION) should appear
+    # Every CONFIG_DEFAULTS key should appear in a category
     for key in "${!CONFIG_DEFAULTS[@]}"; do
-        [[ "$key" == "CONF_VERSION" ]] && continue
         [[ "$cat_keys" == *"$key"* ]]
     done
 }

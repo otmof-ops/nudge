@@ -9,7 +9,8 @@ _nudge_completions() {
 
     # Main flags
     local flags="--version --help --dry-run --check-only --json --verbose
-                 --history --defer --self-update --config --validate --migrate"
+                 --history --defer --self-update --config --validate --migrate
+                 --report"
 
     case "$prev" in
         --defer)
@@ -29,6 +30,10 @@ _nudge_completions() {
             local month_ago
             month_ago=$(date -d '30 days ago' +%Y-%m-%d 2>/dev/null || echo "")
             COMPREPLY=($(compgen -W "$today $week_ago $month_ago" -- "$cur"))
+            return 0
+            ;;
+        --report)
+            COMPREPLY=($(compgen -W "--file --clear --json" -- "$cur"))
             return 0
             ;;
         --config)

@@ -19,7 +19,7 @@ PKG_UPDATES_SNAP=0
 PKG_UPDATE_LIST=""
 
 # Critical package patterns
-readonly CRITICAL_PACKAGES="^(linux-image|linux-headers|openssl|libssl|glibc|libc6|openssh|sudo|pam|libpam|systemd)(-|$)"
+readonly CRITICAL_PACKAGES="^(linux-image|linux-headers|kernel|openssl|libssl|glibc|libc6|openssh|sudo|pam|libpam|systemd|polkit|cups|xz|curl|wget|gnupg|gpg|dbus|grub|shim|mokutil|fwupd)(-|$)"
 
 # --- Detect system package manager ---
 pkgmgr_detect() {
@@ -63,8 +63,12 @@ pkgmgr_lock_check() {
             ;;
         pacman)
             if [[ -f /var/lib/pacman/db.lck ]]; then
-                log_warn "Pacman database locked"
-                return 1
+                if command -v fuser &>/dev/null && ! fuser /var/lib/pacman/db.lck &>/dev/null 2>&1; then
+                    log_warn "Stale pacman lock file found (no process holds it) — consider: sudo rm /var/lib/pacman/db.lck"
+                else
+                    log_warn "Pacman database locked by active process"
+                    return 1
+                fi
             fi
             ;;
         zypper)
@@ -81,7 +85,14 @@ pkgmgr_lock_check() {
 _classify_priority() {
     local pkg_name="$1" is_security="${2:-false}"
 
-    if echo "$pkg_name" | grep -qE "$CRITICAL_PACKAGES"; then
+    # Merge built-in and user-defined critical patterns
+    local pattern="$CRITICAL_PACKAGES"
+    if [[ -n "${CRITICAL_PACKAGES_EXTRA:-}" ]]; then
+        # CRITICAL_PACKAGES_EXTRA is pipe-separated, e.g. "firefox|thunderbird|nss"
+        pattern="^(linux-image|linux-headers|kernel|openssl|libssl|glibc|libc6|openssh|sudo|pam|libpam|systemd|polkit|cups|xz|curl|wget|gnupg|gpg|dbus|grub|shim|mokutil|fwupd|${CRITICAL_PACKAGES_EXTRA})(-|$)"
+    fi
+
+    if echo "$pkg_name" | grep -qE "$pattern"; then
         echo "CRITICAL"
     elif [[ "$is_security" == "true" ]]; then
         echo "SECURITY"
@@ -100,9 +111,16 @@ pkgmgr_count_updates() {
         apt)
             if [[ -x /usr/lib/update-notifier/apt-check ]]; then
                 local apt_out
-                apt_out=$(/usr/lib/update-notifier/apt-check 2>&1 || true)
-                PKG_UPDATES_TOTAL=$(echo "$apt_out" | cut -d';' -f1)
-                PKG_UPDATES_SECURITY=$(echo "$apt_out" | cut -d';' -f2)
+                # apt-check outputs to stderr (by design), capture it properly
+                apt_out=$(/usr/lib/update-notifier/apt-check 2>&1 1>/dev/null || true)
+                if [[ "$apt_out" =~ ^[0-9]+\;[0-9]+$ ]]; then
+                    PKG_UPDATES_TOTAL=$(echo "$apt_out" | cut -d';' -f1)
+                    PKG_UPDATES_SECURITY=$(echo "$apt_out" | cut -d';' -f2)
+                else
+                    log_warn "apt-check returned unexpected output, falling back to apt list"
+                    PKG_UPDATES_TOTAL=$(apt list --upgradable 2>/dev/null | grep -c 'upgradable' || true)
+                    PKG_UPDATES_SECURITY=0
+                fi
             else
                 PKG_UPDATES_TOTAL=$(apt list --upgradable 2>/dev/null | grep -c 'upgradable' || true)
                 PKG_UPDATES_SECURITY=0
@@ -217,18 +235,27 @@ _build_upgrade_cmd() {
 
 # --- Detect terminal emulator ---
 _detect_terminal() {
-    if command -v konsole &>/dev/null; then
-        echo "konsole"
-    elif command -v gnome-terminal &>/dev/null; then
-        echo "gnome-terminal"
-    elif command -v xfce4-terminal &>/dev/null; then
-        echo "xfce4-terminal"
-    elif command -v x-terminal-emulator &>/dev/null; then
-        echo "x-terminal-emulator"
-    elif command -v xterm &>/dev/null; then
-        echo "xterm"
-    else
-        echo "none"
+    # Config override
+    if [[ -n "${TERMINAL_EMULATOR:-}" ]] && [[ "${TERMINAL_EMULATOR:-auto}" != "auto" ]]; then
+        if command -v "$TERMINAL_EMULATOR" &>/dev/null; then
+            echo "$TERMINAL_EMULATOR"
+            return
+        fi
+        log_warn "Configured TERMINAL_EMULATOR=$TERMINAL_EMULATOR not found, auto-detecting"
+    fi
+
+    if command -v konsole &>/dev/null; then echo "konsole"
+    elif command -v gnome-terminal &>/dev/null; then echo "gnome-terminal"
+    elif command -v xfce4-terminal &>/dev/null; then echo "xfce4-terminal"
+    elif command -v alacritty &>/dev/null; then echo "alacritty"
+    elif command -v kitty &>/dev/null; then echo "kitty"
+    elif command -v foot &>/dev/null; then echo "foot"
+    elif command -v wezterm &>/dev/null; then echo "wezterm"
+    elif command -v tilix &>/dev/null; then echo "tilix"
+    elif command -v terminator &>/dev/null; then echo "terminator"
+    elif command -v x-terminal-emulator &>/dev/null; then echo "x-terminal-emulator"
+    elif command -v xterm &>/dev/null; then echo "xterm"
+    else echo "none"
     fi
 }
 
@@ -246,18 +273,38 @@ pkgmgr_upgrade() {
 
     log_info "Running upgrade: $cmd (terminal: $term)"
 
+    local hold_cmd="$cmd; echo; echo 'Press Enter to close.'; read -r"
+
     case "$term" in
         konsole)
             konsole --hold -e bash -c "$cmd"
             ;;
         gnome-terminal)
-            gnome-terminal --wait -- bash -c "$cmd; echo; echo 'Press Enter to close.'; read -r"
+            gnome-terminal --wait -- bash -c "$hold_cmd"
             ;;
         xfce4-terminal)
             xfce4-terminal --hold -e "bash -c \"$cmd\""
             ;;
+        alacritty)
+            alacritty --hold -e bash -c "$cmd"
+            ;;
+        kitty)
+            kitty --hold bash -c "$cmd"
+            ;;
+        foot)
+            foot --hold bash -c "$cmd"
+            ;;
+        wezterm)
+            wezterm start --always-new-process -- bash -c "$hold_cmd"
+            ;;
+        tilix)
+            tilix -e "bash -c \"$hold_cmd\""
+            ;;
+        terminator)
+            terminator -e "bash -c \"$hold_cmd\""
+            ;;
         *)
-            "$term" -e bash -c "$cmd; echo; echo 'Press Enter to close.'; read -r"
+            "$term" -e bash -c "$hold_cmd"
             ;;
     esac
     return $?

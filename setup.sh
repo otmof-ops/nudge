@@ -225,6 +225,8 @@ _init_config_defaults() {
     CFG_JSON_OUTPUT=false
     CFG_LOG_LEVEL="info"
     CFG_BUNNY_PERSONALITY="disney"
+    CFG_TERMINAL_EMULATOR="auto"
+    CFG_CRITICAL_PACKAGES_EXTRA=""
 
     case "${_DETECTED_PKG:-apt}" in
         apt)    CFG_UPDATE_COMMAND="sudo apt update && sudo apt full-upgrade" ;;
@@ -236,18 +238,19 @@ _init_config_defaults() {
 
 # --- Config categories ---
 declare -A CONFIG_CATEGORIES=(
-    [core]="ENABLED DELAY CHECK_SECURITY AUTO_DISMISS UPDATE_COMMAND"
+    [core]="ENABLED DELAY CHECK_SECURITY AUTO_DISMISS UPDATE_COMMAND CONF_VERSION"
     [notification]="NOTIFICATION_BACKEND DUNST_APPNAME PREVIEW_UPDATES SECURITY_PRIORITY BUNNY_PERSONALITY"
     [network]="NETWORK_HOST NETWORK_TIMEOUT NETWORK_RETRIES OFFLINE_MODE"
     [schedule]="SCHEDULE_MODE SCHEDULE_INTERVAL_HOURS DEFERRAL_OPTIONS"
-    [packages]="PKGMGR_OVERRIDE FLATPAK_ENABLED SNAP_ENABLED"
+    [packages]="PKGMGR_OVERRIDE FLATPAK_ENABLED SNAP_ENABLED CRITICAL_PACKAGES_EXTRA"
     [safety]="REBOOT_CHECK SNAPSHOT_ENABLED SNAPSHOT_TOOL"
     [updates]="SELF_UPDATE_CHECK SELF_UPDATE_CHANNEL"
     [logging]="HISTORY_ENABLED HISTORY_MAX_LINES LOG_FILE LOG_LEVEL JSON_OUTPUT"
+    [terminal]="TERMINAL_EMULATOR"
 )
 
-_CATEGORY_NAMES=(core notification network schedule packages safety updates logging)
-_CATEGORY_LABELS=("Core settings" "Notifications" "Network" "Schedule" "Package managers" "Safety" "Updates & auto-update" "Logging")
+_CATEGORY_NAMES=(core notification network schedule packages safety updates logging terminal)
+_CATEGORY_LABELS=("Core settings" "Notifications" "Network" "Schedule" "Package managers" "Safety" "Updates & auto-update" "Logging" "Terminal")
 
 # --- Load existing config ---
 _load_existing_config() {

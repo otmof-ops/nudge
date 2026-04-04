@@ -27,6 +27,13 @@ teardown() {
 # --- Backend detection ---
 
 @test "notify_detect uses config backend when not auto" {
+    # Mock kdialog so command -v check passes
+    cat > "$MOCK_BIN/kdialog" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+    chmod +x "$MOCK_BIN/kdialog"
+    PATH="$MOCK_BIN:$PATH"
     NOTIFICATION_BACKEND="kdialog"
     notify_detect
     [[ "$NOTIFY_BACKEND" == "kdialog" ]]
