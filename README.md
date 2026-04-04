@@ -15,7 +15,7 @@
 
 **A gentle nudge to keep your system fresh.**
 
-Lightweight Linux desktop update manager that checks for available packages after login and asks if you'd like to update. Supports multiple distributions and package managers (apt, dnf, pacman, zypper), 5 notification backends, Flatpak and Snap stores, scheduling with deferral, pre-upgrade snapshots, and a friendly bunny mascot. Pure bash. Zero compiled dependencies. 309 tests.
+Lightweight Linux desktop update manager that checks for available packages after login and asks if you'd like to update. Supports multiple distributions and package managers (apt, dnf, pacman, zypper), 5 notification backends, Flatpak and Snap stores, scheduling with deferral, pre-upgrade snapshots, and a friendly bunny mascot. Pure bash. Zero compiled dependencies. 332 tests.
 
 ## Beta Testing
 
@@ -42,7 +42,7 @@ Most Linux update tools are either silent and automatic, locked to one desktop e
 | Notification backends | **5** | 0 | 1 | 0 |
 | Scheduling + deferral | **Yes** | Yes | No | No |
 | Pre-upgrade snapshots | **Yes** | No | No | No |
-| Test suite | **309** | — | — | — |
+| Test suite | **332** | — | — | — |
 
 ## Features
 
@@ -64,7 +64,7 @@ Most Linux update tools are either silent and automatic, locked to one desktop e
 **One-liner install:**
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/otmof-ops/nudge/master/setup.sh) --install --defaults
+bash <(curl -sL https://raw.githubusercontent.com/otmof-ops/nudge/main/setup.sh) --install --defaults
 ```
 
 **Or clone and run the setup TUI:**
@@ -165,7 +165,7 @@ The unified TUI walks you through install, configure, update, and uninstall — 
 ### One-Liner from GitHub
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/otmof-ops/nudge/master/setup.sh) --install --defaults
+bash <(curl -sL https://raw.githubusercontent.com/otmof-ops/nudge/main/setup.sh) --install --defaults
 ```
 
 ### Upgrade from v1.x
