@@ -168,7 +168,7 @@ selfupdate_install() {
     local tarball="$tmpdir/nudge-${latest_version}.tar.gz"
 
     if command -v curl &>/dev/null; then
-        curl -sL --max-time 60 -o "$tarball" "$tarball_url" 2>/dev/null || {
+        curl -sfL --max-time 60 -o "$tarball" "$tarball_url" 2>/dev/null || {
             echo "Error: Download failed"
             rm -rf "$tmpdir"
             return 1
@@ -191,7 +191,7 @@ selfupdate_install() {
     fi
     local expected_hash
     if command -v curl &>/dev/null; then
-        expected_hash=$(curl -sL "$checksum_url" 2>/dev/null | awk '{print $1}')
+        expected_hash=$(curl -sfL "$checksum_url" 2>/dev/null | awk '{print $1}')
     elif command -v wget &>/dev/null; then
         expected_hash=$(wget -q -O- "$checksum_url" 2>/dev/null | awk '{print $1}')
     fi
