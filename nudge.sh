@@ -20,6 +20,7 @@ _NUDGE_SELF_DIR="$(cd "$(dirname "$NUDGE_SELF")" && pwd)"
 NUDGE_PREFIX=""
 # Installed layout: PREFIX/.local/bin/nudge.sh beside PREFIX/.local/lib/nudge
 if [[ "$_NUDGE_SELF_DIR" == */.local/bin ]]; then
+    # shellcheck disable=SC2034  # read by lib/notify.sh (the icon) and lib/selfupdate.sh (the prefix)
     NUDGE_PREFIX="${_NUDGE_SELF_DIR%/.local/bin}"
 fi
 
@@ -74,11 +75,19 @@ source "$NUDGE_LIB_DIR/bunny.sh"
 # shellcheck source=lib/dialog.sh
 source "$NUDGE_LIB_DIR/dialog.sh"
 
+# --- A UTF-8 locale for the text we cut and measure (a user unit may have none) ---
+case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+    *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) ;;
+    *) export LC_ALL=C.UTF-8 2>/dev/null || true ;;
+esac
+
 # --- The mascot's SVGs: beside the modules once installed, share/mascot in a checkout ---
 _nudge_find_mascot() {
     local c
     for c in "$NUDGE_LIB_DIR/mascot" "$_NUDGE_SELF_DIR/share/mascot" "${NUDGE_MASCOT_DIR:-}"; do
-        [[ -n "$c" ]] && [[ -f "$c/bunny.svg" ]] && { printf '%s' "$c"; return 0; }
+        [[ -n "$c" ]] || continue
+        c=$(cd "$c" 2>/dev/null && pwd -P) || continue
+        [[ -f "$c/bunny.svg" ]] && { printf '%s' "$c"; return 0; }
     done
     return 1
 }
@@ -95,14 +104,15 @@ fi
 
 # --- Exit with an outcome ---
 # A login or timer run exits 0 on the ordinary outcomes (declined, applied,
-# disabled, offline, deferred, reboot pending): the autostart unit must not
-# count a "Not Now" as a failed service. The JSON and the history keep the
-# real code, and a manual run exits with it.
+# disabled, offline, the package manager busy, another run in progress,
+# deferred, reboot pending): the autostart unit must not count a "Not Now" as
+# a failed service. The JSON and every history row keep the real code, and a
+# manual run exits with it. Failures (3, 8, 10, 11, 12) stay non-zero.
 _nudge_exit() {
     local code="$1"
     if [[ "$_NUDGE_TRIGGER" != "manual" ]]; then
         case "$code" in
-            "$EXIT_UPDATES_DECLINED"|"$EXIT_UPDATES_APPLIED"|"$EXIT_DISABLED"|"$EXIT_NETWORK_FAIL"|"$EXIT_DEFERRED"|"$EXIT_REBOOT_PENDING")
+            "$EXIT_UPDATES_DECLINED"|"$EXIT_UPDATES_APPLIED"|"$EXIT_DISABLED"|"$EXIT_NETWORK_FAIL"|"$EXIT_PKG_LOCK"|"$EXIT_ALREADY_RUNNING"|"$EXIT_DEFERRED"|"$EXIT_REBOOT_PENDING")
                 exit "$EXIT_OK" ;;
         esac
     fi
@@ -294,6 +304,8 @@ fi
 # --- Disabled check ---
 if [[ "$ENABLED" != "true" ]]; then
     log_info "nudge is disabled"
+    json_emit "$EXIT_DISABLED"
+    history_write "DISABLED" "ENABLED=false" "$EXIT_DISABLED"
     _nudge_exit "$EXIT_DISABLED"
 fi
 
@@ -323,9 +335,12 @@ _cleanup() {
     _CLEANUP_DONE=true
 
     local sig="${1:-EXIT}"
-    local pid
+    local pid f
     for pid in "${CLEANUP_PIDS[@]}"; do
         kill "$pid" 2>/dev/null || true
+    done
+    for f in "${_NUDGE_TMPFILES[@]}"; do
+        rm -f "$f" 2>/dev/null || true
     done
 
     # Calculate duration
@@ -349,6 +364,12 @@ trap '_cleanup HUP;  exit "$EXIT_INTERRUPTED"' HUP
 if [[ "$CHECK_ONLY" != "true" ]]; then
     if ! lock_acquire; then
         json_emit "$EXIT_ALREADY_RUNNING"
+        if [[ "$_NUDGE_TRIGGER" != "manual" ]]; then
+            # the other run may be a picker or a session left open: this one steps aside
+            log_info "Another nudge instance is running; this ${_NUDGE_TRIGGER} run steps aside"
+            history_write "ALREADY_RUNNING" "trigger: $_NUDGE_TRIGGER" "$EXIT_ALREADY_RUNNING"
+            _nudge_exit "$EXIT_ALREADY_RUNNING"
+        fi
         _exit_error "$EXIT_ALREADY_RUNNING" "Another nudge instance is running"
     fi
 fi
@@ -391,6 +412,7 @@ if ! network_check; then
     [[ "$_NETWORK_RC" -eq 0 ]] && _NETWORK_RC="$EXIT_NETWORK_FAIL"
     _finalize
     json_emit "$_NETWORK_RC"
+    history_write "OFFLINE" "mode: ${OFFLINE_MODE:-skip}" "$_NETWORK_RC"
     _nudge_exit "$_NETWORK_RC"
 fi
 
@@ -405,6 +427,12 @@ json_set "pkg_manager" "$DETECTED_PKGMGR"
 # --- Package manager lock check ---
 if ! pkgmgr_lock_check; then
     json_emit "$EXIT_PKG_LOCK"
+    if [[ "$_NUDGE_TRIGGER" != "manual" ]]; then
+        # unattended-upgrades or a software centre has the lock just after login: not our failure
+        log_info "Package manager locked by another process; this ${_NUDGE_TRIGGER} run steps aside"
+        history_write "PKG_LOCK" "trigger: $_NUDGE_TRIGGER" "$EXIT_PKG_LOCK"
+        _nudge_exit "$EXIT_PKG_LOCK"
+    fi
     _exit_error "$EXIT_PKG_LOCK" "Package manager locked by another process"
 fi
 
@@ -569,7 +597,7 @@ if [[ "$NOTIFY_BACKEND" == "none" ]]; then
     _exit_error "$EXIT_NO_BACKEND" "No notification backend (install kdialog, zenity, or dunst)"
 fi
 
-# --- Show prompt ---
+# --- Show prompt (the preview text is for dunstify's body; the dialogs draw their own) ---
 if ! notify_prompt "$MSG" "$PREVIEW_TEXT"; then
     json_emit "$EXIT_NO_BACKEND"
     history_write "PROMPT_FAILED" "backend ${NOTIFY_BACKEND:-none} could not show the dialog" "$EXIT_NO_BACKEND"
@@ -580,7 +608,6 @@ fi
 case "$NOTIFY_RESPONSE" in
     accepted)
         log_info "User accepted update"
-        bunny_reset_streak
 
         # What to install: everything, the important ones, one source, or one
         # by one in the terminal. The picker needs kdialog or zenity; without
@@ -589,13 +616,15 @@ case "$NOTIFY_RESPONSE" in
         if [[ "${SELECT_UPDATES:-true}" == "true" ]]; then
             if ! _SCOPE=$(dialog_scope_pick "$(bunny_mood accepted)"); then
                 log_info "User cancelled at the scope picker"
+                bunny_increment_streak
                 _finalize
                 json_emit "$EXIT_UPDATES_DECLINED"
-                history_write "DECLINED" "Cancelled at the selection menu" "$EXIT_UPDATES_DECLINED"
+                history_write "DECLINED" "Cancelled at the scope picker" "$EXIT_UPDATES_DECLINED"
                 _nudge_exit "$EXIT_UPDATES_DECLINED"
             fi
         fi
         log_info "Scope: $_SCOPE"
+        bunny_reset_streak
         json_set "scope" "\"$(json_escape "$_SCOPE")\""
 
         # The menu (when picking one by one), the optional snapshot and the

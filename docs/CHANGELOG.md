@@ -44,8 +44,23 @@ as a failed service.
   installs them to `~/.local/lib/nudge/mascot/`.
 - `bunny_say` and `bunny_mood` pick one line and one mood per run, so every
   backend says the same thing; `bunny_render` takes the line as given.
-- `PREVIEW_UPDATES=false` keeps the names out of the prompt (the full list stays
-  a click away).
+- `PREVIEW_UPDATES=false` keeps the names out of the prompt; the full list is a
+  row in the scope picker, so with `SELECT_UPDATES=false` the prompt names the
+  first few and Update Now installs everything.
+- The terminal the session opens in must resolve to a program owned by root;
+  a read-only shim of the user's own no longer passes (the sudo password is
+  typed in that window).
+- `AUTO_DISMISS` closes the scope and deferral pickers and the restart
+  question, not only the prompt.
+- A login or timer run writes a history row for DISABLED, OFFLINE, PKG_LOCK
+  and ALREADY_RUNNING as well, and codes 6 and 7 count as ordinary outcomes
+  there too (`SuccessExitStatus=1 2 4 5 6 7 9 13` in the unit).
+- The dispatcher exports a UTF-8 locale when the session has none (a user
+  unit without LANG), so names are cut by character, not by byte; the rows
+  are sorted under `LC_ALL=C`, so the order is the same for every run.
+- On dnf and zypper `noarch` is no longer shown as a foreign architecture.
+- The decline streak resets once a scope is chosen, and a cancelled picker
+  counts as a decline.
 
 ### Fixed
 - **A declined login run no longer fails the autostart unit.** Under the login
@@ -57,7 +72,13 @@ as a failed service.
 - A session file without a scope line (an older `nudge.sh` writing for a newer
   runner) opens the menu rather than installing everything.
 - The zenity prompt escapes its text, so a `<` or `&` in a package name cannot
-  break the markup.
+  break the markup; dunst's body is escaped too (it renders markup by default);
+  control characters never reach a dialog.
+- `setup.sh` quotes the replacement when it writes the install prefix into
+  the autostart entry and the unit files, so a `&` in the path survives
+  bash 5.2.
+- `important` on pacman (which never partially upgrades) takes the whole
+  system list, matching what the runner does.
 
 ## [2.1.0] — 2026-10-09
 

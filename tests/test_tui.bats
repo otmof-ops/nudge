@@ -15,8 +15,7 @@ setup() {
     _tui_init
     [[ -z "$_TUI_ACCENT" && -z "$_TUI_BOLD" && -z "$_TUI_RESET" ]]
     [[ "$_TUI_DEPTH" -eq 0 ]]
-    NO_COLOR=1 _tui_init
-    [[ -z "$_TUI_CRIT" ]]
+    [[ "$(COLORTERM=truecolor NO_COLOR=1 _tui_color_depth true)" == "0" ]]
 }
 
 @test "the depth follows COLORTERM and tput when colour is on" {

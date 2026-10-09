@@ -17,6 +17,9 @@ NUDGE_MASCOT_DIR="${NUDGE_MASCOT_DIR:-}"
 # show the plain message they are handed
 _DIALOG_READY="${_DIALOG_READY:-false}"
 
+# Temporary files the dialogs make (the full-list box); nudge.sh's cleanup removes them
+_NUDGE_TMPFILES=()
+
 # The palette, shared with lib/tui.sh and docs/assets/make-mascot.sh
 DIALOG_C_CRIT="#d93b3b"
 DIALOG_C_SEC="#e0a21d"
@@ -63,8 +66,12 @@ dialog_mascot_file() {
         happy|wide|worried|sleepy|teary|crying|wave) f="$dir/bunny-${mood}.svg" ;;
         *) f="$dir/bunny.svg" ;;
     esac
-    [[ -f "$f" ]] || f="$dir/bunny.svg"
-    [[ -f "$f" ]] || return 1
+    [[ -f "$f" && ! -L "$f" ]] || f="$dir/bunny.svg"
+    [[ -f "$f" && ! -L "$f" ]] || return 1
+    # a regular file of a sane size: the dialog process renders it
+    local size
+    size=$(stat -c %s "$f" 2>/dev/null) || return 1
+    [[ "$size" =~ ^[0-9]+$ && "$size" -le 65536 ]] || return 1
     printf '%s' "$f"
 }
 
@@ -120,29 +127,40 @@ _dialog_sources_long() {
 # Every update as one row, kind|sub|label|from|to: system packages first
 # (critical, then security, then the rest, each by name), then Flatpak
 # (applications, then runtimes), then Snap.
+# Control characters are stripped here, once, for every dialog; the arch
+# suffix (libxml2:i386) is apt's alone (dnf and zypper say noarch); the order
+# does not depend on the user's locale.
 _dialog_rows() {
-    local native=""
+    local native="" apt=""
     if declare -F pkgmgr_native_arch >/dev/null 2>&1; then native=$(pkgmgr_native_arch 2>/dev/null || true); fi
+    [[ "${DETECTED_PKGMGR:-}" == "apt" ]] && apt=1
     if [[ -n "${PKG_UPDATE_LIST:-}" ]]; then
-        printf '%s\n' "$PKG_UPDATE_LIST" | awk -F'|' -v native="$native" '
+        printf '%s\n' "$PKG_UPDATE_LIST" | awk -F'|' -v native="$native" -v apt="$apt" '
             NF >= 4 && $1 != "" {
                 rank = ($4 == "CRITICAL") ? 0 : ($4 == "SECURITY") ? 1 : 2
                 kind = ($4 == "CRITICAL") ? "critical" : ($4 == "SECURITY") ? "security" : "standard"
-                label = $1
-                if ($5 != "" && native != "" && $5 != native && $5 != "all") label = label ":" $5
-                printf "%d|%s|system|%s|%s|%s|%s\n", rank, $1, kind, label, $2, $3
-            }' | sort -t'|' -k1,1n -k2,2 | cut -d'|' -f3-
+                label = $1; from = $2; to = $3
+                if (apt == "1" && $5 != "" && native != "" && $5 != native && $5 != "all") label = label ":" $5
+                gsub(/[[:cntrl:]]/, "", label); gsub(/[[:cntrl:]]/, "", from); gsub(/[[:cntrl:]]/, "", to)
+                printf "%d|%s|system|%s|%s|%s|%s\n", rank, label, kind, label, from, to
+            }' | LC_ALL=C sort -t'|' -k1,1n -k2,2 | cut -d'|' -f3-
     fi
     if [[ -n "${PKG_FLATPAK_LIST:-}" ]]; then
         printf '%s\n' "$PKG_FLATPAK_LIST" | awk -F'|' '
             NF >= 2 && $2 != "" {
                 kind = ($1 == "runtime") ? "runtime" : "app"
-                label = ($4 != "") ? $4 : $3
-                printf "flatpak|%s|%s||%s\n", kind, label, $5
+                label = ($4 != "") ? $4 : $3; to = $5
+                gsub(/[[:cntrl:]]/, "", label); gsub(/[[:cntrl:]]/, "", to)
+                printf "flatpak|%s|%s||%s\n", kind, label, to
             }'
     fi
     if [[ -n "${PKG_SNAP_LIST:-}" ]]; then
-        printf '%s\n' "$PKG_SNAP_LIST" | awk -F'|' 'NF >= 1 && $1 != "" { printf "snap|snap|%s||%s\n", $1, $2 }'
+        printf '%s\n' "$PKG_SNAP_LIST" | awk -F'|' '
+            NF >= 1 && $1 != "" {
+                label = $1; to = $2
+                gsub(/[[:cntrl:]]/, "", label); gsub(/[[:cntrl:]]/, "", to)
+                printf "snap|snap|%s||%s\n", label, to
+            }'
     fi
 }
 
@@ -217,10 +235,13 @@ _dialog_names() {
         mark=$("_dialog_mark_$fmt" "$kind" "$sub")
         case "$fmt" in
             html)
-                # Qt breaks a line at a hyphen even inside nowrap: the display copy gets non-breaking ones
+                # Qt ignores white-space on a span and breaks at hyphens and spaces, so
+                # the display copy gets non-breaking ones (U+2011, &nbsp;); a name
+                # pasted from the dialog carries them, the terminal menu does not
                 name=$(dialog_escape "$(_dialog_trim "$label" 40)")
                 name="${name//-/‑}"
-                out+="${out:+, }<span style=\"white-space:nowrap\">${mark}${name}</span>" ;;
+                name="${name// /&nbsp;}"
+                out+="${out:+, }${mark}${name}" ;;
             pango)
                 name=$(dialog_escape "$(_dialog_trim "$label" 40)")
                 out+="${out:+, }${mark}${name}" ;;
@@ -232,9 +253,9 @@ _dialog_names() {
     local more=$((total - n))
     if [[ "$more" -gt 0 ]]; then
         case "$fmt" in
-            html)  out+="<span style=\"color:${DIALOG_C_DIM}\"> …and ${more} more</span>" ;;
-            pango) out+="<span foreground=\"${DIALOG_C_DIM}\"> …and ${more} more</span>" ;;
-            *)     out+=" …and ${more} more" ;;
+            html)  out+="<span style=\"color:${DIALOG_C_DIM}\">, and&nbsp;${more}&nbsp;more</span>" ;;
+            pango) out+="<span foreground=\"${DIALOG_C_DIM}\">, and&#160;${more}&#160;more</span>" ;;
+            *)     out+=", and ${more} more" ;;
         esac
     fi
     printf '%s' "$out"
@@ -360,10 +381,16 @@ dialog_show_fulllist() {
     local title="nudge · all ${_DLG_TOTAL} updates"
     case "$tool" in
         kdialog)
-            # kdialog wants a real file for --textbox: a private one, removed after
+            # kdialog wants a real file for --textbox: a private one under the
+            # runtime dir (cleared at logout), removed after, and by the
+            # dispatcher's cleanup on a signal
             local tmp
-            tmp=$(umask 077 && mktemp) || return 0
-            dialog_fulllist_html > "$tmp"
+            tmp=$(umask 077 && mktemp "${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/nudge-list.XXXXXX") || return 0
+            _NUDGE_TMPFILES+=("$tmp")
+            if ! dialog_fulllist_html > "$tmp"; then
+                rm -f "$tmp"
+                return 0
+            fi
             "${wrap[@]}" kdialog --icon "$(_dialog_icon)" --title "$title" --textbox "$tmp" 640 480 >/dev/null 2>&1 || true
             rm -f "$tmp"
             ;;
@@ -397,14 +424,19 @@ _dialog_picker_head_pango() {
 _dialog_pick() {
     local title="${1:-}" subtitle="${2:-}" mood="${3:-normal}" tool tag label def choice="" rc=0
     tool=$(_dialog_tool) || return 1
-    local -a args=()
+    local -a args=() wrap=() zen_timeout=()
+    local dismiss="${AUTO_DISMISS:-0}"
+    if [[ "$dismiss" =~ ^[0-9]+$ && "$dismiss" -gt 0 ]]; then
+        wrap=(timeout "$dismiss")
+        zen_timeout=("--timeout=$dismiss")
+    fi
     case "$tool" in
         kdialog)
             while IFS='|' read -r tag label def; do
                 [[ -n "$tag" ]] && args+=("$tag" "$label" "${def:-off}")
             done
             [[ "${#args[@]}" -gt 0 ]] || return 1
-            choice=$(kdialog --icon "$(_dialog_icon)" --title "nudge" \
+            choice=$("${wrap[@]}" kdialog --icon "$(_dialog_icon)" --title "nudge" \
                 --radiolist "$(_dialog_picker_head_html "$title" "$subtitle" "$mood")" "${args[@]}" 2>/dev/null) || rc=$?
             ;;
         zenity)
@@ -419,7 +451,7 @@ _dialog_pick() {
             choice=$(zenity --list --radiolist --title="nudge" \
                 --text="$(_dialog_picker_head_pango "$title" "$subtitle")" \
                 --column="" --column="tag" --column="" --hide-column=2 --print-column=2 --hide-header \
-                --width=460 --height=380 "${args[@]}" 2>/dev/null) || rc=$?
+                --width=460 --height=380 "${zen_timeout[@]}" "${args[@]}" 2>/dev/null) || rc=$?
             ;;
         *) return 1 ;;
     esac
@@ -502,6 +534,12 @@ dialog_defer_pick() {
 dialog_reboot_ask() {
     local quote="${1:-}" tool
     tool=$(_dialog_tool) || return 1
+    local -a wrap=() zen_timeout=()
+    local dismiss="${AUTO_DISMISS:-0}"
+    if [[ "$dismiss" =~ ^[0-9]+$ && "$dismiss" -gt 0 ]]; then
+        wrap=(timeout "$dismiss")
+        zen_timeout=("--timeout=$dismiss")
+    fi
     local title="A restart finishes the update"
     local sub="the new kernel or core libraries take over on the next boot"
     local ask="Restart now? Save your work first."
@@ -514,7 +552,7 @@ dialog_reboot_ask() {
             body+="<span style=\"color:${DIALOG_C_DIM}\">${sub}</span>"
             [[ -n "$quote" ]] && body+="<br><br><i>&#8220;$(dialog_escape "$quote")&#8221;</i>"
             body+="<br><br>${ask}</td></tr></table></body></html>"
-            if kdialog --icon "$(_dialog_icon)" --title "nudge" --yes-label "Restart Now" --no-label "Later" --yesno "$body" 2>/dev/null; then
+            if "${wrap[@]}" kdialog --icon "$(_dialog_icon)" --title "nudge" --yes-label "Restart Now" --no-label "Later" --yesno "$body" 2>/dev/null; then
                 return 0
             fi
             return 1
@@ -524,7 +562,7 @@ dialog_reboot_ask() {
             text="<span size=\"large\" weight=\"bold\">${title}</span>${nl}<span foreground=\"${DIALOG_C_DIM}\">${sub}</span>"
             [[ -n "$quote" ]] && text+="${nl}${nl}<i>&#8220;$(dialog_escape "$quote")&#8221;</i>"
             text+="${nl}${nl}${ask}"
-            if zenity --question --icon-name="$(_dialog_icon)" --title="nudge" --ok-label="Restart Now" --cancel-label="Later" --text="$text" 2>/dev/null; then
+            if zenity --question --icon-name="$(_dialog_icon)" --title="nudge" --ok-label="Restart Now" --cancel-label="Later" --text="$text" "${zen_timeout[@]}" 2>/dev/null; then
                 return 0
             fi
             return 1

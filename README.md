@@ -273,7 +273,7 @@ Edit `~/.config/nudge/nudge.conf`:
 |--------|------|---------|-------------|
 | `NOTIFICATION_BACKEND` | enum | `auto` | `auto`/`kdialog`/`zenity`/`dunstify`/`gdbus`/`notify-send`/`none` |
 | `DUNST_APPNAME` | string | `nudge` | App name for dunst |
-| `PREVIEW_UPDATES` | bool | `true` | Show the first package names in the prompt (the full list is always a click away) |
+| `PREVIEW_UPDATES` | bool | `true` | Show the first package names in the prompt (the full list is a row in the scope picker) |
 | `SECURITY_PRIORITY` | bool | `true` | Show critical/security packages first |
 
 ### Schedule Settings
@@ -372,7 +372,7 @@ nudge --migrate              # Run config migration
 | 12 | `EXIT_SNAPSHOT_FAILED` | Snapshot failed, aborted |
 | 13 | `EXIT_REBOOT_PENDING` | Reboot required |
 
-Under the login or timer trigger (the autostart entry and the systemd unit set `_NUDGE_TRIGGER`), the ordinary outcomes 1, 2, 4, 5, 9 and 13 exit 0, so the autostart service never shows as failed because you clicked Not Now. The history and the JSON keep the real code, and a manual run still exits with it.
+Under the login or timer trigger (the autostart entry and the systemd unit set `_NUDGE_TRIGGER`), the ordinary outcomes 1, 2, 4, 5, 6, 7, 9 and 13 exit 0, so the autostart service never shows as failed because you clicked Not Now, the package manager was busy, or a run was already open. The JSON and every history row keep the real code, and a manual run still exits with it. Failures (3, 8, 10, 11, 12) stay non-zero everywhere.
 
 ## JSON Output
 
@@ -418,11 +418,11 @@ The prompt says how many updates there are and where from, flags the critical an
 
 <p align="center"><img src="docs/assets/screenshot-scope.png" alt="What should I install? Everything, critical and security only, one source, pick one by one, show the full list first" width="320">&nbsp;&nbsp;<img src="docs/assets/screenshot-defer.png" alt="When should I ask again? In an hour, in 4 hours, tomorrow, next week" width="320"></p>
 
-**Update Now** asks one more question: everything, the critical and security updates only, one source only (offered when there are several), **pick one by one** (the terminal menu below), or **show the full list first** (every update grouped by source, with versions). **Remind Me Later** asks when, in plain words, from `DEFERRAL_OPTIONS`.
+**Update Now** asks one more question: everything, the critical and security updates only, one source only (offered when there are several), **pick one by one** (the terminal menu below), or **show the full list first** (every update grouped by source, with versions). **Remind Me Later** asks when, in plain words, from `DEFERRAL_OPTIONS`. With `SELECT_UPDATES=false` there is no question: the prompt names the first few and Update Now installs everything.
 
 <p align="center"><img src="docs/assets/screenshot-list.png" alt="the full list: system packages with critical and security badges and versions, then Flatpak, then snaps" width="640"></p>
 
-kdialog draws all of this as rich text with the bunny in it; zenity shows the same text in Pango markup with the bunny as the window icon; dunstify, gdbus and notify-send get the plain text. Every package name is escaped before it reaches the markup.
+kdialog draws all of this as rich text with the bunny in it; zenity shows the same text in Pango markup with the bunny as the window icon; dunstify, gdbus and notify-send get the plain text. Every package name is escaped before it reaches the markup (dunst's too), control characters are stripped, and `AUTO_DISMISS` closes the pickers as well as the prompt. The terminal the session opens in must be a known one owned by root: a read-only copy of the user's own does not count, because that window is where the sudo password is typed.
 
 ## The Selection Menu
 

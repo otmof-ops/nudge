@@ -313,6 +313,7 @@ alsa|1|2|STANDARD|all|0"
 }
 
 @test "preview marks foreign-architecture packages" {
+    DETECTED_PKGMGR="apt"
     PKG_UPDATE_LIST="libxml2|1|2|SECURITY|amd64|1
 libxml2|1|2|SECURITY|i386|1"
     _PKG_NATIVE_ARCH="amd64"
@@ -442,6 +443,39 @@ esac'
     local t
     t=$(_detect_terminal)
     [[ "$t" != "xterm" ]] || [[ "$(type -P xterm)" != "$MOCK_BIN/xterm" ]]
+}
+
+@test "_terminal_path wants a program owned by root, not a read-only shim of the user's" {
+    printf '#!/bin/bash\n' > "$MOCK_BIN/konsole"; chmod 0555 "$MOCK_BIN/konsole"
+    ln -s /usr/bin/env "$MOCK_BIN/kitty"
+    PATH="$MOCK_BIN:$PATH"
+    run ! _terminal_path konsole
+    [[ "$(_terminal_path kitty)" == "$MOCK_BIN/kitty" ]]
+}
+
+@test "the plain preview adds an arch suffix for apt only" {
+    DETECTED_PKGMGR="dnf"
+    _PKG_NATIVE_ARCH="x86_64"
+    PKG_UPDATE_LIST="linux-firmware||20260901-1.fc42|STANDARD|noarch|0"
+    run pkgmgr_build_preview
+    [[ "$output" == *"linux-firmware"* ]]
+    [[ "$output" != *":noarch"* ]]
+    DETECTED_PKGMGR="apt"
+    _PKG_NATIVE_ARCH="amd64"
+    PKG_UPDATE_LIST="libxml2|1|2|STANDARD|i386|0"
+    run pkgmgr_build_preview
+    [[ "$output" == *"libxml2:i386"* ]]
+}
+
+@test "pkgmgr_write_session refuses an unknown scope with the menu" {
+    DETECTED_PKGMGR="apt"
+    PKG_UPDATE_LIST="vim|1|2|STANDARD|amd64|0"
+    PKG_FLATPAK_LIST="" PKG_SNAP_LIST=""
+    export NUDGE_STATE_DIR="$TMPDIR_TEST/state"
+    local sess
+    sess=$(pkgmgr_write_session $'all\npkgmgr=evil')
+    grep -qx 'scope=pick' "$sess"
+    run ! grep -q 'evil' "$sess"
 }
 
 @test "_runner_exec_command runs the grammar as argument vectors, never through a shell" {

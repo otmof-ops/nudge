@@ -138,8 +138,13 @@ select_apply_scope() {
             select_set_all 1 ;;
         important)
             select_set_all 0
-            select_set system critical 1
-            select_set system security 1 ;;
+            if select_is_atomic system; then
+                # pacman never partially upgrades: the whole system list or nothing
+                select_set system "" 1
+            else
+                select_set system critical 1
+                select_set system security 1
+            fi ;;
         system|flatpak|snap)
             select_set_all 0
             select_set "$1" "" 1 ;;

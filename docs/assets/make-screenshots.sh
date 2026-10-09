@@ -4,8 +4,11 @@
 # nudge — docs/assets/make-screenshots.sh
 # Draws the dialogs and the terminal session with sample data on a virtual X
 # display and writes docs/assets/screenshot-*.png; nothing reaches the real
-# screen. Needs Xvfb, kdialog, konsole (or xterm), ImageMagick (import,
-# convert) and xdotool. Run from the repository root:
+# screen. The terminal picture runs the real session runner on a sample
+# session file that asks for the menu, and the runner is killed once the
+# picture is taken, so nothing is ever installed. Needs Xvfb, kdialog, konsole
+# (or xterm), ImageMagick (import, convert) and xdotool. Run from the
+# repository root:
 #
 #   docs/assets/make-screenshots.sh
 
@@ -102,8 +105,8 @@ if command -v konsole >/dev/null 2>&1; then
     # konsole keeps its toolbar whatever the config says: it is the top 46 px of the window
     convert "$TMP/raw.png" -trim +repage -gravity North -chop 0x46 +repage -trim +repage "$OUT/screenshot-terminal.png"
     echo "wrote: $OUT/screenshot-terminal.png"
-    xdotool type --delay 60 "q" 2>/dev/null || true; xdotool key Return 2>/dev/null || true
-    sleep 1; xdotool key Return 2>/dev/null || true
+    # the runner is ended here, not answered: no keystroke can ever accept the menu
+    pkill -f -- "--_run-upgrade $sess" 2>/dev/null || true
 elif command -v xterm >/dev/null 2>&1; then
     ( env -u NO_COLOR COLORTERM=truecolor xterm -geometry 84x26 -fa 'DejaVu Sans Mono' -fs 11 -bg '#1b1e20' -fg '#e3e5e8' \
         -e bash nudge.sh --_run-upgrade "$sess" >/dev/null 2>&1 || true ) &
@@ -111,6 +114,6 @@ elif command -v xterm >/dev/null 2>&1; then
     import -display "$VDISPLAY" -window root "$TMP/raw.png"
     convert "$TMP/raw.png" -trim +repage "$OUT/screenshot-terminal.png"
     echo "wrote: $OUT/screenshot-terminal.png"
-    xdotool type --delay 60 "q" 2>/dev/null || true; xdotool key Return 2>/dev/null || true
+    pkill -f -- "--_run-upgrade $sess" 2>/dev/null || true
 fi
 sleep 1

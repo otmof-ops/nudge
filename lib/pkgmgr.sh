@@ -336,13 +336,18 @@ pkgmgr_custom_update_command() {
 # --- Terminal emulators nudge knows how to drive ---
 readonly _KNOWN_TERMINALS=" konsole gnome-terminal xfce4-terminal alacritty kitty foot wezterm tilix terminator x-terminal-emulator xterm "
 
-# A known name that resolves to a real program the user cannot modify
-# Usage: _terminal_path <name> -> prints the resolved path
+# A known name that resolves to a real program the user cannot modify: the
+# file it points at is owned by root and not writable (a read-only shim of
+# the user's own would otherwise do, and it is where the sudo password is typed)
+# Usage: _terminal_path <name> -> prints the path PATH gave
 _terminal_path() {
-    local name="$1" path
+    local name="$1" path real owner
     [[ " $_KNOWN_TERMINALS " == *" $name "* ]] || return 1
     path=$(type -P "$name" 2>/dev/null) || return 1
-    [[ -n "$path" && -x "$path" && ! -w "$path" ]] || return 1
+    [[ -n "$path" ]] || return 1
+    real=$(readlink -f "$path" 2>/dev/null) || return 1
+    owner=$(stat -c %u "$real" 2>/dev/null) || return 1
+    [[ -n "$real" && -x "$real" && "$owner" == "0" && ! -w "$real" ]] || return 1
     printf '%s' "$path"
 }
 
@@ -354,7 +359,7 @@ _detect_terminal() {
             echo "$TERMINAL_EMULATOR"
             return
         fi
-        log_warn "Configured TERMINAL_EMULATOR=$TERMINAL_EMULATOR is not a known, system-installed terminal; auto-detecting"
+        log_warn "Configured TERMINAL_EMULATOR=$TERMINAL_EMULATOR is not a known terminal owned by root; auto-detecting"
     fi
 
     local t
@@ -509,7 +514,7 @@ pkgmgr_build_preview() {
         [[ "$count" -gt "$max_lines" ]] && break
 
         local line="  ${name}"
-        [[ -n "$arch" && "$arch" != "$native" && "$arch" != "all" ]] && line+=":${arch}"
+        [[ "$DETECTED_PKGMGR" == "apt" && -n "$arch" && "$arch" != "$native" && "$arch" != "all" ]] && line+=":${arch}"
         if [[ -n "$from_ver" ]]; then
             line+=" (${from_ver} → ${to_ver})"
         elif [[ -n "$to_ver" ]]; then
@@ -558,6 +563,10 @@ pkgmgr_build_json_packages() {
 # flatpak, snap, or pick (the terminal menu).
 pkgmgr_write_session() {
     local scope="${1:-all}"
+    case "$scope" in
+        all|important|system|flatpak|snap|pick) ;;
+        *) scope="pick" ;;
+    esac
     local dir="${NUDGE_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/nudge}"
     mkdir -p "$dir" 2>/dev/null || { log_error "Cannot create state directory: $dir"; return 1; }
     local sess
@@ -1018,7 +1027,10 @@ pkgmgr_run_upgrade_session() {
     _runner_status_write pid "$$"
     _runner_status_write started "$(date -Iseconds 2>/dev/null || date)"
     _runner_status_write scope "$_RUNNER_SCOPE"
-    select_apply_scope "$_RUNNER_SCOPE" || select_apply_scope all
+    if ! select_apply_scope "$_RUNNER_SCOPE"; then
+        _RUNNER_SCOPE="pick"
+        select_apply_scope pick
+    fi
 
     local personality="${BUNNY_PERSONALITY:-disney}"
     local face="${BUNNY_FACE_NORMAL:-}"

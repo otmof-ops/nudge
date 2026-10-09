@@ -219,3 +219,11 @@ setup() {
     [[ "$output" == *"◆ Applications"* ]]
     [[ "$output" == *"● Snaps"* ]]
 }
+
+@test "select_apply_scope important on an atomic list takes the whole system list" {
+    select_mark_atomic system
+    select_apply_scope important
+    [[ "$(select_count system)" == "4 4" ]]
+    [[ "$(select_count flatpak)" == "0 2" ]]
+    [[ "$(select_count snap)" == "0 1" ]]
+}

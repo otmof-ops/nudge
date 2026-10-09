@@ -251,9 +251,11 @@ A login or timer run with no display session exits 0 and records
 SKIPPED_NO_DISPLAY in the history instead of failing.
 .PP
 Under the login or timer trigger (the autostart entry and the systemd unit
-set \fB_NUDGE_TRIGGER\fR) the ordinary outcomes 1, 2, 4, 5, 9 and 13 exit 0,
-so the autostart service never shows as failed after "Not Now". The history
-and the JSON output keep the real code; a manual run exits with it.
+set \fB_NUDGE_TRIGGER\fR) the ordinary outcomes 1, 2, 4, 5, 6, 7, 9 and 13
+exit 0, so the autostart service never shows as failed after "Not Now", a
+busy package manager or a run already open. The JSON output and every
+history row keep the real code; a manual run exits with it. Failures (3, 8,
+10, 11, 12) stay non-zero.
 .SH FILES
 .TP
 .I ~/.config/nudge/nudge.conf

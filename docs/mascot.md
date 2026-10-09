@@ -21,6 +21,9 @@ drawn by `docs/assets/make-mascot.sh` so every asset is the same bunny.
 `lib/dialog.sh` draws them into kdialog's rich text: 104 px tall in the prompt
 and the restart dialog, 56 px in the pickers. zenity cannot draw an image in
 its text, so there the bunny is the window icon and the line is the text.
+Qt breaks a line at a hyphen or a space whatever the span says, so the names
+in the prompt carry non-breaking ones; a name copied out of the dialog keeps
+them, the terminal menu and the full list do not.
 
 ## Moods
 

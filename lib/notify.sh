@@ -207,12 +207,16 @@ _prompt_dunstify() {
     local timeout_ms=0
     [[ "$dismiss" -gt 0 ]] && timeout_ms=$((dismiss * 1000))
 
-    # Append first 5 lines of preview to body
+    # Append first 5 lines of preview to body; dunst renders markup, so the
+    # package names are escaped (dunst decodes the entities again)
     local body="$msg"
     if [[ -n "$preview" ]] && [[ "${PREVIEW_UPDATES:-true}" == "true" ]]; then
         local preview_lines
         preview_lines=$(echo "$preview" | head -5)
         body="${msg}\n\n${preview_lines}"
+    fi
+    if declare -F dialog_escape >/dev/null 2>&1; then
+        body=$(dialog_escape "$body")
     fi
 
     local action
@@ -264,6 +268,9 @@ _prompt_notify_send() {
 }
 
 # --- Main prompt dispatcher ---
+# Usage: notify_prompt <plain message> [preview]
+# The preview (the first package lines) is for dunstify's body; kdialog and
+# zenity draw their own from lib/dialog.sh.
 notify_prompt() {
     local msg="$1"
     local preview="${2:-}"

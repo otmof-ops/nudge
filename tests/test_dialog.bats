@@ -121,7 +121,7 @@ EOF
     [[ "$output" == *"12 updates are ready"* ]]
     [[ "$output" == *"snap‑8"* ]]
     [[ "$output" != *"snap‑9"* ]]
-    [[ "$output" == *"…and 4 more"* ]]
+    [[ "$output" == *", and&nbsp;4&nbsp;more"* ]]
 }
 
 @test "the prompt without a mascot has no image and a single update reads as one" {
@@ -329,4 +329,73 @@ EOF
     grep -qx 'Later' "$KDIALOG_ARGS"
     _mock_kdialog "" 1
     run ! dialog_reboot_ask
+}
+
+@test "hostile names from every source come out as text, never as markup" {
+    PKG_UPDATE_LIST=$'evil<b>name|1"><img src=x>|2|STANDARD|amd64|0\n<a href="https://evil.example/">click|1|2|CRITICAL|amd64|0'
+    PKG_FLATPAK_LIST='app|app/org.x.Y/x86_64/stable|org.x.Y|<a href="https://evil.example/">Update now</a>|"><img src="file:///etc/passwd">'
+    PKG_SNAP_LIST='core<i>x</i>|1|1|1MB|<script>'
+    PKG_UPDATES_TOTAL=2 PKG_UPDATES_FLATPAK=1 PKG_UPDATES_SNAP=1
+    mkdir -p "$TMPDIR_TEST/ma&s\"cot"
+    echo '<svg/>' > "$TMPDIR_TEST/ma&s\"cot/bunny.svg"
+    NUDGE_MASCOT_DIR="$TMPDIR_TEST/ma&s\"cot"
+    local out
+    for out in "$(dialog_prompt_html '<a href=x>quote</a>' normal '<hint>' '<note>')" "$(dialog_fulllist_html)" "$(_dialog_picker_head_html '<t>' '<s>' normal)"; do
+        [[ "$out" != *"<a "* && "$out" != *"<script"* ]]
+        [[ "$out" != *"<img src=x"* && "$out" != *'src="file:'* ]]
+        [[ "$out" != *"<b>"* && "$out" != *"core<i>"* ]]
+    done
+    out=$(dialog_prompt_html "" normal "" "")
+    [[ "$(grep -o '<img' <<< "$out" | wc -l)" -eq 1 ]]
+    [[ "$out" == *"ma&amp;s&quot;cot/bunny.svg"* ]]
+    out=$(dialog_prompt_pango '<a href=x>q</a>' '' '')
+    [[ "$out" != *"<a "* && "$out" != *"<b>"* ]]
+    out=$(dialog_fulllist_text)
+    [[ "$out" == *'<a href="https://evil.example/">Update now</a>'* ]]   # plain text stays plain
+}
+
+@test "control characters are stripped and the arch suffix is apt's alone" {
+    PKG_FLATPAK_LIST=$'app|app/org.x.Y/x86_64/stable|org.x.Y|esc\033[31mRED\007bell|1.0'
+    PKG_SNAP_LIST=""
+    PKG_UPDATE_LIST=""
+    run dialog_fulllist_text
+    [[ "$output" != *$'\033'* && "$output" != *$'\007'* ]]
+    [[ "$output" == *"esc[31mREDbell"* ]]
+    DETECTED_PKGMGR="dnf"
+    pkgmgr_native_arch() { echo x86_64; }
+    PKG_UPDATE_LIST='linux-firmware||20260901|STANDARD|noarch|0'
+    run _dialog_rows
+    [[ "${lines[0]}" == "system|standard|linux-firmware||20260901" ]]
+}
+
+@test "the order of names does not depend on the locale" {
+    PKG_UPDATE_LIST=$'libfoo|1|2|STANDARD|amd64|0\nlib_baz|1|2|STANDARD|amd64|0\nlib-foo|1|2|STANDARD|amd64|0'
+    PKG_FLATPAK_LIST="" PKG_SNAP_LIST=""
+    run env LC_ALL=en_US.UTF-8 bash -c "source '$PROJECT_DIR/lib/dialog.sh'; PKG_UPDATE_LIST=\$'libfoo|1|2|STANDARD|amd64|0\nlib_baz|1|2|STANDARD|amd64|0\nlib-foo|1|2|STANDARD|amd64|0' _dialog_rows | cut -d'|' -f3 | tr '\n' ' '"
+    [[ "$output" == "lib-foo lib_baz libfoo " ]]
+}
+
+@test "_dialog_trim counts characters under a UTF-8 locale" {
+    local out
+    out=$(LC_ALL=C.UTF-8 _dialog_trim "ééééé" 3)
+    [[ "$out" == "éé…" ]]
+    printf '%s' "$out" | iconv -f UTF-8 -t UTF-8 >/dev/null
+}
+
+@test "AUTO_DISMISS closes the pickers and the restart question" {
+    cat > "$MOCK_BIN/timeout" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$@" >> "$TIMEOUT_ARGS"
+exit 124
+EOF
+    _mock_kdialog "all" 0
+    chmod +x "$MOCK_BIN/timeout"
+    export TIMEOUT_ARGS="$TMPDIR_TEST/timeout_args"
+    AUTO_DISMISS=15
+    run dialog_scope_pick
+    [[ "$status" -eq 1 ]]
+    grep -qx '15' "$TIMEOUT_ARGS"
+    grep -qx -- '--radiolist' "$TIMEOUT_ARGS"
+    run ! dialog_reboot_ask
+    grep -qx -- '--yesno' "$TIMEOUT_ARGS"
 }

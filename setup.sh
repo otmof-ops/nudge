@@ -156,7 +156,7 @@ HELPTEXT
 done
 
 # --- The install prefix: an absolute directory, ~ expanded ---
-_PREFIX="${_PREFIX/#\~/$HOME}"
+_PREFIX="${_PREFIX/#\~/"$HOME"}"
 _PREFIX="${_PREFIX%/}"
 if [[ -z "$_PREFIX" || "$_PREFIX" != /* ]]; then
     echo "Error: --prefix must be an absolute path (got '${_PREFIX}')" >&2
@@ -379,7 +379,7 @@ _copy_with_replacement() {
     local src="$1" dest="$2" token="$3" value="$4" line
     {
         while IFS= read -r line || [[ -n "$line" ]]; do
-            printf '%s\n' "${line//"$token"/$value}"
+            printf '%s\n' "${line//"$token"/"$value"}"
         done < "$src"
     } > "$dest" || return 1
 }
@@ -863,7 +863,7 @@ _screen_install_options() {
         1)
             local new_prefix
             new_prefix=$(_tui_input "Install prefix" "$_PREFIX")
-            new_prefix="${new_prefix/#\~/$HOME}"
+            new_prefix="${new_prefix/#\~/"$HOME"}"
             new_prefix="${new_prefix%/}"
             if [[ "$new_prefix" != /* ]]; then
                 _tui_warn "The prefix must be an absolute path"
