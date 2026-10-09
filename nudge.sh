@@ -2,11 +2,11 @@
 # SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/nudge)
 # SPDX-License-Identifier: BSD-3-Clause
 # nudge — A gentle nudge to keep your system fresh.
-# Version: 2.1.0
+# Version: 2.2.0
 
 set -euo pipefail
 
-NUDGE_VERSION="2.1.0"
+NUDGE_VERSION="2.2.0"
 _NUDGE_START_TIME=$(date +%s)
 _NUDGE_TRIGGER="${_NUDGE_TRIGGER:-manual}"
 case "$_NUDGE_TRIGGER" in
@@ -20,6 +20,7 @@ _NUDGE_SELF_DIR="$(cd "$(dirname "$NUDGE_SELF")" && pwd)"
 NUDGE_PREFIX=""
 # Installed layout: PREFIX/.local/bin/nudge.sh beside PREFIX/.local/lib/nudge
 if [[ "$_NUDGE_SELF_DIR" == */.local/bin ]]; then
+    # shellcheck disable=SC2034  # read by lib/notify.sh (the icon) and lib/selfupdate.sh (the prefix)
     NUDGE_PREFIX="${_NUDGE_SELF_DIR%/.local/bin}"
 fi
 
@@ -71,6 +72,26 @@ source "$NUDGE_LIB_DIR/bunny-poses.sh"
 source "$NUDGE_LIB_DIR/bunny-dialogue.sh"
 # shellcheck source=lib/bunny.sh
 source "$NUDGE_LIB_DIR/bunny.sh"
+# shellcheck source=lib/dialog.sh
+source "$NUDGE_LIB_DIR/dialog.sh"
+
+# --- A UTF-8 locale for the text we cut and measure (a user unit may have none) ---
+case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+    *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) ;;
+    *) export LC_ALL=C.UTF-8 2>/dev/null || true ;;
+esac
+
+# --- The mascot's SVGs: beside the modules once installed, share/mascot in a checkout ---
+_nudge_find_mascot() {
+    local c
+    for c in "$NUDGE_LIB_DIR/mascot" "$_NUDGE_SELF_DIR/share/mascot" "${NUDGE_MASCOT_DIR:-}"; do
+        [[ -n "$c" ]] || continue
+        c=$(cd "$c" 2>/dev/null && pwd -P) || continue
+        [[ -f "$c/bunny.svg" ]] && { printf '%s' "$c"; return 0; }
+    done
+    return 1
+}
+NUDGE_MASCOT_DIR="$(_nudge_find_mascot)" || NUDGE_MASCOT_DIR=""
 
 # --- Upgrade session runner (launched inside a terminal by pkgmgr_upgrade) ---
 if [[ "${1:-}" == "--_run-upgrade" ]]; then
@@ -80,6 +101,23 @@ if [[ "${1:-}" == "--_run-upgrade" ]]; then
     pkgmgr_run_upgrade_session "${2:-}"
     exit $?
 fi
+
+# --- Exit with an outcome ---
+# A login or timer run exits 0 on the ordinary outcomes (declined, applied,
+# disabled, offline, the package manager busy, another run in progress,
+# deferred, reboot pending): the autostart unit must not count a "Not Now" as
+# a failed service. The JSON and every history row keep the real code, and a
+# manual run exits with it. Failures (3, 8, 10, 11, 12) stay non-zero.
+_nudge_exit() {
+    local code="$1"
+    if [[ "$_NUDGE_TRIGGER" != "manual" ]]; then
+        case "$code" in
+            "$EXIT_UPDATES_DECLINED"|"$EXIT_UPDATES_APPLIED"|"$EXIT_DISABLED"|"$EXIT_NETWORK_FAIL"|"$EXIT_PKG_LOCK"|"$EXIT_ALREADY_RUNNING"|"$EXIT_DEFERRED"|"$EXIT_REBOOT_PENDING")
+                exit "$EXIT_OK" ;;
+        esac
+    fi
+    exit "$code"
+}
 
 # --- CLI flags ---
 DRY_RUN=false
@@ -222,7 +260,7 @@ fi
 if [[ -n "$_DEFER_CMD" ]]; then
     if schedule_defer "$_DEFER_CMD"; then
         echo "Next check deferred for $_DEFER_CMD"
-        exit "$EXIT_DEFERRED"
+        _nudge_exit "$EXIT_DEFERRED"
     else
         echo "Invalid defer duration: $_DEFER_CMD (expected: 1h, 4h, 1d, 1w)" >&2
         exit "$EXIT_CONFIG_ERROR"
@@ -266,7 +304,9 @@ fi
 # --- Disabled check ---
 if [[ "$ENABLED" != "true" ]]; then
     log_info "nudge is disabled"
-    exit "$EXIT_DISABLED"
+    json_emit "$EXIT_DISABLED"
+    history_write "DISABLED" "ENABLED=false" "$EXIT_DISABLED"
+    _nudge_exit "$EXIT_DISABLED"
 fi
 
 # --- Finalize duration ---
@@ -295,9 +335,12 @@ _cleanup() {
     _CLEANUP_DONE=true
 
     local sig="${1:-EXIT}"
-    local pid
+    local pid f
     for pid in "${CLEANUP_PIDS[@]}"; do
         kill "$pid" 2>/dev/null || true
+    done
+    for f in "${_NUDGE_TMPFILES[@]}"; do
+        rm -f "$f" 2>/dev/null || true
     done
 
     # Calculate duration
@@ -321,6 +364,12 @@ trap '_cleanup HUP;  exit "$EXIT_INTERRUPTED"' HUP
 if [[ "$CHECK_ONLY" != "true" ]]; then
     if ! lock_acquire; then
         json_emit "$EXIT_ALREADY_RUNNING"
+        if [[ "$_NUDGE_TRIGGER" != "manual" ]]; then
+            # the other run may be a picker or a session left open: this one steps aside
+            log_info "Another nudge instance is running; this ${_NUDGE_TRIGGER} run steps aside"
+            history_write "ALREADY_RUNNING" "trigger: $_NUDGE_TRIGGER" "$EXIT_ALREADY_RUNNING"
+            _nudge_exit "$EXIT_ALREADY_RUNNING"
+        fi
         _exit_error "$EXIT_ALREADY_RUNNING" "Another nudge instance is running"
     fi
 fi
@@ -343,7 +392,7 @@ if safety_check_pending_reboot; then
             _finalize
             json_emit "$EXIT_REBOOT_PENDING"
             history_write "REBOOT_PENDING" "User declined reboot" "$EXIT_REBOOT_PENDING"
-            exit "$EXIT_REBOOT_PENDING"
+            _nudge_exit "$EXIT_REBOOT_PENDING"
         fi
     fi
 fi
@@ -363,7 +412,8 @@ if ! network_check; then
     [[ "$_NETWORK_RC" -eq 0 ]] && _NETWORK_RC="$EXIT_NETWORK_FAIL"
     _finalize
     json_emit "$_NETWORK_RC"
-    exit "$_NETWORK_RC"
+    history_write "OFFLINE" "mode: ${OFFLINE_MODE:-skip}" "$_NETWORK_RC"
+    _nudge_exit "$_NETWORK_RC"
 fi
 
 # --- Detect package manager ---
@@ -377,6 +427,12 @@ json_set "pkg_manager" "$DETECTED_PKGMGR"
 # --- Package manager lock check ---
 if ! pkgmgr_lock_check; then
     json_emit "$EXIT_PKG_LOCK"
+    if [[ "$_NUDGE_TRIGGER" != "manual" ]]; then
+        # unattended-upgrades or a software centre has the lock just after login: not our failure
+        log_info "Package manager locked by another process; this ${_NUDGE_TRIGGER} run steps aside"
+        history_write "PKG_LOCK" "trigger: $_NUDGE_TRIGGER" "$EXIT_PKG_LOCK"
+        _nudge_exit "$EXIT_PKG_LOCK"
+    fi
     _exit_error "$EXIT_PKG_LOCK" "Package manager locked by another process"
 fi
 
@@ -441,6 +497,7 @@ if [[ -z "$PKG_UPDATE_LIST" ]]; then
 fi
 json_set "updates_critical" "$PKG_UPDATES_CRITICAL"
 json_set "packages" "$(pkgmgr_build_json_packages)"
+_DIALOG_READY=true
 
 # --- Check-only mode ---
 if [[ "$CHECK_ONLY" == "true" ]]; then
@@ -475,17 +532,27 @@ _CHECK_DETAIL=""
 [[ "$_CHECK_CRIT" -gt 0 ]] && { [[ -n "$_CHECK_DETAIL" ]] && _CHECK_DETAIL+=" · "; _CHECK_DETAIL+="${_CHECK_CRIT} critical"; }
 [[ -z "$_CHECK_DETAIL" ]] && _CHECK_DETAIL="all standard priority"
 
-# Bunny personality
-BUNNY_MSG=$(bunny_render "prompt" "nudge: ${_CHECK_TOTAL} updates · ${_CHECK_DETAIL}" "$TOTAL_UPDATES")
+# The bunny: one line and one mood for this run, shared by every backend
+_BUNNY_STREAK=$(bunny_get_streak)
+DIALOG_QUOTE=$(bunny_say "prompt" "$TOTAL_UPDATES")
+DIALOG_MOOD=$(bunny_mood "prompt" "$_BUNNY_STREAK" "$TOTAL_UPDATES")
+DIALOG_HINT=""
+DIALOG_NOTE=""
+BUNNY_MSG=$(bunny_render "prompt" "nudge: ${_CHECK_TOTAL} updates · ${_CHECK_DETAIL}" "$TOTAL_UPDATES" "$DIALOG_QUOTE")
 MSG="${BUNNY_MSG}\n\nWould you like to update now?"
 if [[ "${SELECT_UPDATES:-true}" == "true" ]]; then
-    MSG+="\nYou choose what to update on the next screen."
+    DIALOG_HINT="You choose what to install next."
+else
+    DIALOG_HINT="Everything will be installed."
 fi
+MSG+="\n${DIALOG_HINT}"
 if pkgmgr_custom_update_command; then
-    MSG+="\nUpdate command (from your config): $(_build_upgrade_cmd)"
+    DIALOG_NOTE="Update command (from your config): $(_build_upgrade_cmd)"
+    MSG+="\n${DIALOG_NOTE}"
 fi
 
 if [[ -n "$SELFUPDATE_AVAILABLE" ]]; then
+    DIALOG_NOTE+="${DIALOG_NOTE:+  }nudge v${SELFUPDATE_AVAILABLE} is available: run nudge --self-update"
     MSG+="\n\n(nudge v${SELFUPDATE_AVAILABLE} is available — run: nudge --self-update)"
 fi
 
@@ -500,6 +567,11 @@ if [[ "$DRY_RUN" == "true" ]]; then
         if [[ -n "$PREVIEW_TEXT" ]]; then
             echo "Preview:"
             echo "$PREVIEW_TEXT"
+        fi
+        if [[ -n "$NUDGE_MASCOT_DIR" ]]; then
+            echo "Mascot: ${DIALOG_MOOD} (${NUDGE_MASCOT_DIR})"
+        else
+            echo "Mascot: not installed (the text bunny only)"
         fi
     fi
     _finalize
@@ -525,7 +597,7 @@ if [[ "$NOTIFY_BACKEND" == "none" ]]; then
     _exit_error "$EXIT_NO_BACKEND" "No notification backend (install kdialog, zenity, or dunst)"
 fi
 
-# --- Show prompt ---
+# --- Show prompt (the preview text is for dunstify's body; the dialogs draw their own) ---
 if ! notify_prompt "$MSG" "$PREVIEW_TEXT"; then
     json_emit "$EXIT_NO_BACKEND"
     history_write "PROMPT_FAILED" "backend ${NOTIFY_BACKEND:-none} could not show the dialog" "$EXIT_NO_BACKEND"
@@ -536,12 +608,29 @@ fi
 case "$NOTIFY_RESPONSE" in
     accepted)
         log_info "User accepted update"
-        bunny_reset_streak
 
-        # The selection menu, the optional snapshot and the upgrades all run
-        # inside a terminal window, where sudo can ask for a password
+        # What to install: everything, the important ones, one source, or one
+        # by one in the terminal. The picker needs kdialog or zenity; without
+        # them the terminal menu does the picking.
+        _SCOPE="all"
+        if [[ "${SELECT_UPDATES:-true}" == "true" ]]; then
+            if ! _SCOPE=$(dialog_scope_pick "$(bunny_mood accepted)"); then
+                log_info "User cancelled at the scope picker"
+                bunny_increment_streak
+                _finalize
+                json_emit "$EXIT_UPDATES_DECLINED"
+                history_write "DECLINED" "Cancelled at the scope picker" "$EXIT_UPDATES_DECLINED"
+                _nudge_exit "$EXIT_UPDATES_DECLINED"
+            fi
+        fi
+        log_info "Scope: $_SCOPE"
+        bunny_reset_streak
+        json_set "scope" "\"$(json_escape "$_SCOPE")\""
+
+        # The menu (when picking one by one), the optional snapshot and the
+        # upgrades all run inside a terminal window, where sudo can ask
         _UPGRADE_RC=0
-        if pkgmgr_upgrade; then _UPGRADE_RC=0; else _UPGRADE_RC=$?; fi
+        if pkgmgr_upgrade "$_SCOPE"; then _UPGRADE_RC=0; else _UPGRADE_RC=$?; fi
 
         if [[ -n "${_UPG_SNAPSHOT_ID:-}" ]]; then
             json_set "snapshot_id" "\"$(json_escape "$_UPG_SNAPSHOT_ID")\""
@@ -558,7 +647,7 @@ case "$NOTIFY_RESPONSE" in
             _finalize
             json_emit "$EXIT_UPDATES_DECLINED"
             history_write "DECLINED" "Cancelled at the selection menu" "$EXIT_UPDATES_DECLINED"
-            exit "$EXIT_UPDATES_DECLINED"
+            _nudge_exit "$EXIT_UPDATES_DECLINED"
         fi
 
         if [[ "$_UPGRADE_RC" -eq 0 ]]; then
@@ -574,7 +663,7 @@ case "$NOTIFY_RESPONSE" in
             _finalize
             json_emit "$EXIT_UPDATES_APPLIED"
             history_write "APPLIED" "${_UPG_DETAIL}${_extra_failures:+; partial failures:$_extra_failures}" "$EXIT_UPDATES_APPLIED"
-            exit "$EXIT_UPDATES_APPLIED"
+            _nudge_exit "$EXIT_UPDATES_APPLIED"
         else
             log_error "System upgrade failed: $_UPG_DETAIL"
             json_emit "$EXIT_UPDATES_FAILED"
@@ -593,13 +682,13 @@ case "$NOTIFY_RESPONSE" in
             _finalize
             json_emit "$EXIT_UPDATES_DECLINED"
             history_write "DECLINED" "Deferral cancelled" "$EXIT_UPDATES_DECLINED"
-            exit "$EXIT_UPDATES_DECLINED"
+            _nudge_exit "$EXIT_UPDATES_DECLINED"
         fi
 
         _finalize
         json_emit "$EXIT_DEFERRED"
         history_write "DEFERRED" "" "$EXIT_DEFERRED"
-        exit "$EXIT_DEFERRED"
+        _nudge_exit "$EXIT_DEFERRED"
         ;;
 
     passive)
@@ -616,6 +705,6 @@ case "$NOTIFY_RESPONSE" in
         _finalize
         json_emit "$EXIT_UPDATES_DECLINED"
         history_write "DECLINED" "" "$EXIT_UPDATES_DECLINED"
-        exit "$EXIT_UPDATES_DECLINED"
+        _nudge_exit "$EXIT_UPDATES_DECLINED"
         ;;
 esac

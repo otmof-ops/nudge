@@ -15,17 +15,17 @@ teardown() {
     [[ -n "${_INTEGRATION_TMPDIR:-}" ]] && rm -rf "$_INTEGRATION_TMPDIR" || true
 }
 
-@test "nudge --version prints 2.1.0" {
+@test "nudge --version prints 2.2.0" {
     run "$NUDGE" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge 2.1.0" ]]
+    [[ "$output" == "nudge 2.2.0" ]]
 }
 
 @test "nudge --help prints usage with bunny mascot" {
     run "$NUDGE" --help
     [[ "$status" -eq 0 ]]
     [[ "$output" == *'(\__/)'* ]]
-    [[ "$output" == *"nudge 2.1.0"* ]]
+    [[ "$output" == *"nudge 2.2.0"* ]]
     [[ "$output" == *"Usage:"* ]]
     [[ "$output" == *"--dry-run"* ]]
     [[ "$output" == *"--json"* ]]
@@ -75,7 +75,7 @@ teardown() {
 @test "install.sh --version prints version via setup.sh" {
     run "$PROJECT_DIR/install.sh" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge setup 2.1.0" ]]
+    [[ "$output" == "nudge setup 2.2.0" ]]
 }
 
 @test "install.sh --help shows setup.sh flags" {
@@ -177,6 +177,29 @@ EOT
     export PATH="$_INTEGRATION_TMPDIR/bin:$PATH"
 }
 
+# A kdialog that says Update Now, then picks a scope, and never agrees to a restart
+_integration_kdialog() {
+    local scope="$1"
+    cat > "$_INTEGRATION_TMPDIR/bin/kdialog" <<EOT
+#!/bin/bash
+printf '%s\n' "\$@" >> "$_INTEGRATION_TMPDIR/kdialog.log"
+case "\$*" in
+    *--radiolist*)   echo "$scope"; exit 0 ;;
+    *--yesnocancel*) exit 0 ;;
+esac
+exit 1
+EOT
+    chmod +x "$_INTEGRATION_TMPDIR/bin/kdialog"
+}
+
+# A terminal that runs its command right here, in a new session so the
+# runner cannot reach the developer's tty: the runner's rule wants a program
+# owned by root, and setsid is one (kitty's launch form is plain arguments)
+_integration_terminal() {
+    ln -s /usr/bin/setsid "$_INTEGRATION_TMPDIR/bin/kitty"
+    printf 'TERMINAL_EMULATOR="kitty"\nREBOOT_CHECK=false\n' >> "$XDG_CONFIG_HOME/nudge/nudge.conf"
+}
+
 @test "check-only --json is valid JSON with no stray terminal bytes" {
     _integration_mocks
     run "$NUDGE" --check-only --json
@@ -216,7 +239,7 @@ EOT
     printf 'pkgmgr=apt\narch=amd64\n[system]\nvim|1|2|STANDARD|amd64|0\n[flatpak]\n[snap]\n' > "$sess"
     chmod 600 "$sess"
     : > "$sess.status"
-    run bash -c "printf 'q\n' | '$NUDGE' --_run-upgrade '$sess'"
+    run bash -c "printf 'q\n' | setsid -w '$NUDGE' --_run-upgrade '$sess'"
     [[ "$status" -eq 0 ]]
     grep -q '^cancelled=1$' "$sess.status"
     grep -q '^done=1$' "$sess.status"
@@ -237,7 +260,7 @@ EOT
     cp "$PROJECT_DIR"/lib/*.sh "$prefix/.local/lib/nudge/"
     run env -u NUDGE_LIB_DIR HOME="$_INTEGRATION_TMPDIR/elsewhere" "$prefix/.local/bin/nudge.sh" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge 2.1.0" ]]
+    [[ "$output" == "nudge 2.2.0" ]]
 }
 
 @test "flags that need a value or a parent flag are usage errors, not silent runs" {
@@ -286,4 +309,145 @@ EOT
     [[ "$status" -eq 0 ]]
     [[ "${lines[0]}" == "{" ]]
     [[ "$output" != *"Preview:"* ]]
+}
+
+@test "a login run that is declined exits 0; a manual one exits 1; both record the decline" {
+    _integration_mocks
+    printf '#!/bin/bash\nexit 2\n' > "$_INTEGRATION_TMPDIR/bin/kdialog"
+    chmod +x "$_INTEGRATION_TMPDIR/bin/kdialog"
+    run env DISPLAY=:0 KDE_SESSION_VERSION=5 _NUDGE_TRIGGER=login "$NUDGE"
+    [[ "$status" -eq 0 ]]
+    grep -q '"outcome":"DECLINED"' "$XDG_DATA_HOME/nudge/history.jsonl"
+    grep -q '"exit_code":1}' "$XDG_DATA_HOME/nudge/history.jsonl"
+    run env DISPLAY=:0 KDE_SESSION_VERSION=5 XDG_DATA_HOME="$_INTEGRATION_TMPDIR/data2" "$NUDGE"
+    [[ "$status" -eq 1 ]]
+    grep -q '"outcome":"DECLINED"' "$_INTEGRATION_TMPDIR/data2/nudge/history.jsonl"
+}
+
+@test "a login run that is deferred exits 0 and records the deferral" {
+    _integration_mocks
+    cat > "$_INTEGRATION_TMPDIR/bin/kdialog" <<'EOT'
+#!/bin/bash
+case "$*" in
+    *--radiolist*) echo 4h; exit 0 ;;
+esac
+exit 1
+EOT
+    chmod +x "$_INTEGRATION_TMPDIR/bin/kdialog"
+    run env DISPLAY=:0 KDE_SESSION_VERSION=5 _NUDGE_TRIGGER=login "$NUDGE"
+    [[ "$status" -eq 0 ]]
+    grep -q '"outcome":"DEFERRED"' "$XDG_DATA_HOME/nudge/history.jsonl"
+    grep -q '"exit_code":9}' "$XDG_DATA_HOME/nudge/history.jsonl"
+    run env DISPLAY=:0 KDE_SESSION_VERSION=5 XDG_DATA_HOME="$_INTEGRATION_TMPDIR/data2" "$NUDGE"
+    [[ "$status" -eq 9 ]]
+}
+
+@test "the prompt gets the rich body with the mascot from the checkout" {
+    _integration_mocks
+    printf '#!/bin/bash\nprintf "%%s\\n" "$@" > "$KDIALOG_ARGS"\nexit 2\n' > "$_INTEGRATION_TMPDIR/bin/kdialog"
+    chmod +x "$_INTEGRATION_TMPDIR/bin/kdialog"
+    export KDIALOG_ARGS="$_INTEGRATION_TMPDIR/kdialog_args"
+    run env DISPLAY=:0 KDE_SESSION_VERSION=5 "$NUDGE"
+    [[ "$status" -eq 1 ]]
+    grep -q '<html>' "$KDIALOG_ARGS"
+    grep -q "$PROJECT_DIR/share/mascot/bunny" "$KDIALOG_ARGS"
+    grep -q '2 updates are ready' "$KDIALOG_ARGS"
+    grep -q '1 critical' "$KDIALOG_ARGS"
+    grep -q 'openssl' "$KDIALOG_ARGS"
+    run ! grep -q -- '--textbox' "$KDIALOG_ARGS"
+}
+
+@test "Update Now, then Flatpak only: the session runs in the terminal and applies just that" {
+    _integration_mocks
+    _integration_terminal
+    _integration_kdialog flatpak
+    printf 'FLATPAK_ENABLED=true\n' >> "$XDG_CONFIG_HOME/nudge/nudge.conf"
+    cat > "$_INTEGRATION_TMPDIR/bin/flatpak" <<'EOT'
+#!/bin/bash
+case "${1:-}" in
+    remotes)   echo flathub ;;
+    remote-ls) [[ "$*" == *--app* ]] && printf 'app/org.x.Y/x86_64/stable\torg.x.Y\tY\t1.0\n' ;;
+    update)    printf '%s\n' "$*" >> "$FLATPAK_LOG" ;;
+esac
+exit 0
+EOT
+    chmod +x "$_INTEGRATION_TMPDIR/bin/flatpak"
+    export FLATPAK_LOG="$_INTEGRATION_TMPDIR/flatpak.log"
+    run env DISPLAY=:0 KDE_SESSION_VERSION=5 _NUDGE_TRIGGER=login "$NUDGE"
+    [[ "$status" -eq 0 ]]
+    grep -q '"outcome":"APPLIED"' "$XDG_DATA_HOME/nudge/history.jsonl"
+    grep -q 'system:skipped (0/2)' "$XDG_DATA_HOME/nudge/history.jsonl"
+    grep -q 'flatpak:ok (1/1)' "$XDG_DATA_HOME/nudge/history.jsonl"
+    grep -qx 'update -y' "$FLATPAK_LOG"
+    # the scope picker was drawn with the happy bunny and the sources
+    grep -q 'What should I install?' "$_INTEGRATION_TMPDIR/kdialog.log"
+    grep -qx 'Flatpak only  (1)' "$_INTEGRATION_TMPDIR/kdialog.log"
+    [[ "$output" == *"update session"* ]]
+    [[ "$output" == *"here we go!"* ]]
+    [[ "$output" == *"all done!"* ]]
+}
+
+@test "cancelling the scope picker is a decline at the selection menu" {
+    _integration_mocks
+    cat > "$_INTEGRATION_TMPDIR/bin/kdialog" <<'EOT'
+#!/bin/bash
+case "$*" in
+    *--yesnocancel*) exit 0 ;;
+esac
+exit 1
+EOT
+    chmod +x "$_INTEGRATION_TMPDIR/bin/kdialog"
+    run env DISPLAY=:0 KDE_SESSION_VERSION=5 "$NUDGE"
+    [[ "$status" -eq 1 ]]
+    grep -q 'Cancelled at the scope picker' "$XDG_DATA_HOME/nudge/history.jsonl"
+    [[ "$(cat "$XDG_DATA_HOME/nudge/decline_streak")" == "1" ]]
+}
+
+@test "a login run exits 0 when disabled or offline and records why; a manual one keeps the code" {
+    _integration_mocks
+    printf 'ENABLED=false\n' >> "$XDG_CONFIG_HOME/nudge/nudge.conf"
+    run env _NUDGE_TRIGGER=login "$NUDGE"
+    [[ "$status" -eq 0 ]]
+    grep -q '"outcome":"DISABLED"' "$XDG_DATA_HOME/nudge/history.jsonl"
+    grep -q '"exit_code":4}' "$XDG_DATA_HOME/nudge/history.jsonl"
+    run "$NUDGE"
+    [[ "$status" -eq 4 ]]
+    # offline: every probe fails
+    _integration_mocks
+    printf '#!/bin/bash\nexit 1\n' > "$_INTEGRATION_TMPDIR/bin/curl"
+    printf '#!/bin/bash\nexit 1\n' > "$_INTEGRATION_TMPDIR/bin/wget"
+    printf '#!/bin/bash\nexit 1\n' > "$_INTEGRATION_TMPDIR/bin/ping"
+    chmod +x "$_INTEGRATION_TMPDIR/bin/"*
+    run env DISPLAY=:0 _NUDGE_TRIGGER=timer "$NUDGE"
+    [[ "$status" -eq 0 ]]
+    grep -q '"outcome":"OFFLINE"' "$XDG_DATA_HOME/nudge/history.jsonl"
+    grep -q '"exit_code":5}' "$XDG_DATA_HOME/nudge/history.jsonl"
+    run env DISPLAY=:0 XDG_DATA_HOME="$_INTEGRATION_TMPDIR/data2" "$NUDGE"
+    [[ "$status" -eq 5 ]]
+}
+
+@test "SELECT_UPDATES=false installs everything with no picker" {
+    _integration_mocks
+    _integration_terminal
+    _integration_kdialog all
+    printf 'SELECT_UPDATES=false\nFLATPAK_ENABLED=true\n' >> "$XDG_CONFIG_HOME/nudge/nudge.conf"
+    # no system packages this time (the full upgrade would want the real sudo): a Flatpak only
+    printf '#!/bin/bash\necho Listing...\n' > "$_INTEGRATION_TMPDIR/bin/apt"
+    cat > "$_INTEGRATION_TMPDIR/bin/flatpak" <<'EOT'
+#!/bin/bash
+case "${1:-}" in
+    remotes)   echo flathub ;;
+    remote-ls) [[ "$*" == *--app* ]] && printf 'app/org.x.Y/x86_64/stable\torg.x.Y\tY\t1.0\n' ;;
+    update)    printf '%s\n' "$*" >> "$FLATPAK_LOG" ;;
+esac
+exit 0
+EOT
+    chmod +x "$_INTEGRATION_TMPDIR/bin/apt" "$_INTEGRATION_TMPDIR/bin/flatpak"
+    export FLATPAK_LOG="$_INTEGRATION_TMPDIR/flatpak.log"
+    run env DISPLAY=:0 KDE_SESSION_VERSION=5 "$NUDGE"
+    [[ "$status" -eq 2 ]]
+    grep -q '"outcome":"APPLIED"' "$XDG_DATA_HOME/nudge/history.jsonl"
+    grep -qx 'update -y' "$FLATPAK_LOG"
+    run ! grep -q 'What should I install?' "$_INTEGRATION_TMPDIR/kdialog.log"
+    grep -q 'Everything will be installed.' "$_INTEGRATION_TMPDIR/kdialog.log"
 }

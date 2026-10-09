@@ -473,17 +473,66 @@ _bunny_select_pose() {
     esac
 }
 
+# --- The mood of the SVG character ---
+# Usage: bunny_mood <context> [streak] [total_updates]
+# One of normal, happy, wide, worried, sleepy, teary, crying, wave: the files
+# in share/mascot, picked the way bunny_face picks the text face.
+bunny_mood() {
+    local context="${1:-prompt}" streak="${2:-0}" total="${3:-0}"
+    if [[ "${BUNNY_PERSONALITY:-disney}" == "classic" ]]; then
+        echo "normal"
+        return
+    fi
+    local effective
+    effective=$(_bunny_detect_special_context "$context" "$total")
+    case "$effective" in
+        first_run|returning) echo "wave" ;;
+        big_update)          echo "wide" ;;
+        accepted|security)   echo "happy" ;;
+        zero)                echo "sleepy" ;;
+        reboot|network)      echo "worried" ;;
+        prompt)
+            if [[ "$streak" -ge 5 ]]; then echo "crying"
+            elif [[ "$streak" -ge 4 ]]; then echo "teary"
+            elif [[ "$streak" -ge 3 ]]; then echo "worried"
+            else echo "normal"
+            fi
+            ;;
+        declined)
+            if [[ "$streak" -ge 4 ]]; then echo "crying"
+            elif [[ "$streak" -ge 3 ]]; then echo "teary"
+            elif [[ "$streak" -ge 2 ]]; then echo "worried"
+            else echo "normal"
+            fi
+            ;;
+        *) echo "normal" ;;
+    esac
+}
+
+# --- One line from the bunny, picked once per run ---
+# Usage: bunny_say <context> [total_updates]
+bunny_say() {
+    local context="${1:-prompt}" total="${2:-0}" effective
+    if [[ "${BUNNY_PERSONALITY:-disney}" == "classic" ]]; then
+        _bunny_message_classic "$context"
+        return
+    fi
+    effective=$(_bunny_detect_special_context "$context" "$total")
+    _bunny_message_disney "$effective"
+}
+
 # --- Primary render API ---
-# Usage: bunny_render <context> <detail> [total_updates]
-# Returns complete multi-line bunny string
+# Usage: bunny_render <context> <detail> [total_updates] [message]
+# Returns complete multi-line bunny string; a message given is used as is
+# (bunny_say picked it), otherwise one is picked here.
 bunny_render() {
-    local context="$1" detail="${2:-}" total_updates="${3:-0}"
+    local context="$1" detail="${2:-}" total_updates="${3:-0}" given="${4:-}"
     local personality="${BUNNY_PERSONALITY:-disney}"
 
     # Classic mode — neutral message, resting face, sitting pose
     if [[ "$personality" == "classic" ]]; then
         local classic_msg classic_out
-        classic_msg=$(_bunny_message_classic "$context")
+        if [[ -n "$given" ]]; then classic_msg="$given"; else classic_msg=$(_bunny_message_classic "$context"); fi
         classic_out=$(bunny_pose "sitting" "$BUNNY_FACE_NORMAL" "$classic_msg")
         if [[ -n "$detail" ]]; then
             printf '%s  %s' "$classic_out" "$detail"
@@ -505,9 +554,9 @@ bunny_render() {
     local face
     face=$(bunny_face "$effective_context" "$streak")
 
-    # Select message
+    # Select message (or take the one given)
     local msg
-    msg=$(_bunny_message_disney "$effective_context")
+    if [[ -n "$given" ]]; then msg="$given"; else msg=$(_bunny_message_disney "$effective_context"); fi
 
     # Build message with detail
     local full_msg="$msg"

@@ -505,3 +505,45 @@ line3" "christmas"
     [[ "$output" == *'(\__/)'* ]]
     [[ "$output" == *'(")_(")'* ]]
 }
+
+# --- The SVG mood and the single line ---
+
+@test "bunny_mood follows the streak for the prompt" {
+    touch "$_BUNNY_INSTALL_DATE_FILE" 2>/dev/null || true
+    [[ "$(bunny_mood prompt 0)" == "normal" ]]
+    [[ "$(bunny_mood prompt 3)" == "worried" ]]
+    [[ "$(bunny_mood prompt 4)" == "teary" ]]
+    [[ "$(bunny_mood prompt 5)" == "crying" ]]
+}
+
+@test "bunny_mood by context: happy, sleepy, worried, wide, wave" {
+    touch "$_BUNNY_INSTALL_DATE_FILE" 2>/dev/null || true
+    [[ "$(bunny_mood accepted)" == "happy" ]]
+    [[ "$(bunny_mood zero)" == "sleepy" ]]
+    [[ "$(bunny_mood reboot)" == "worried" ]]
+    [[ "$(bunny_mood network)" == "worried" ]]
+    [[ "$(bunny_mood prompt 0 60)" == "wide" ]]
+    rm -f "$_BUNNY_INSTALL_DATE_FILE"
+    [[ "$(bunny_mood prompt 0)" == "wave" ]]
+}
+
+@test "bunny_mood is always normal in classic mode" {
+    BUNNY_PERSONALITY="classic"
+    [[ "$(bunny_mood prompt 5)" == "normal" ]]
+    [[ "$(bunny_mood accepted)" == "normal" ]]
+}
+
+@test "bunny_say gives one line and bunny_render takes it as given" {
+    touch "$_BUNNY_INSTALL_DATE_FILE" 2>/dev/null || true
+    local line
+    line=$(bunny_say prompt 3)
+    [[ -n "$line" ]]
+    run bunny_render prompt "detail" 3 "$line"
+    [[ "$output" == *"$line"* ]]
+    run bunny_render prompt "detail" 3 "a given line"
+    [[ "$output" == *"a given line"* ]]
+    BUNNY_PERSONALITY="classic"
+    [[ "$(bunny_say prompt)" == "Updates available" ]]
+    run bunny_render prompt "" 0 "given classic"
+    [[ "$output" == *"given classic"* ]]
+}

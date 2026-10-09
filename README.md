@@ -1,7 +1,7 @@
 # nudge
 
 <p align="center">
-  <img src="docs/assets/bunny.svg" alt="the Nudge Bunny" width="200">
+  <img src="share/mascot/bunny.svg" alt="the Nudge Bunny" width="200">
 </p>
 <p align="center"><i>a gentle nudge to keep your system fresh</i></p>
 
@@ -46,7 +46,8 @@ Most Linux update tools are either silent and automatic, locked to one desktop e
 ## Features
 
 - **Consent-first updates** — never updates without your explicit approval; Update Now, Remind Later, or Not Now
-- **Pick what to update** — after Update Now, a menu in a terminal window lists every source of updates with its subcategories (critical, security and other system packages; Flatpak applications and runtimes; snaps), with select-all at each level and single-package picking; only what you tick is applied, and `sudo` asks for your password in that window
+- **Dialogs with the bunny in them** — the prompt draws the Nudge Bunny in the mood of the moment, the counts, red and amber chips for critical and security updates, and the first package names; kdialog gets rich text, zenity the same in Pango markup
+- **Pick what to update** — after Update Now, one question: everything, critical and security updates only, one source only, the full list first, or pick one by one; picking one by one opens the menu in a terminal window (every source with its subcategories, select-all at each level, single packages), and only what you tick is applied, with `sudo` asking for your password in that window
 - **Multi-distro support** — auto-detects apt, dnf, pacman, and zypper across Ubuntu, Fedora, Arch, and openSUSE
 - **5 notification backends** — dunstify, kdialog, zenity, gdbus, and notify-send with automatic detection
 - **Flatpak + Snap** — checks universal package stores alongside your system package manager
@@ -82,7 +83,7 @@ installed copy verifies them again on every self-update. To start from a verifie
 one-liner:
 
 ```bash
-git clone --branch v2.1.0 https://github.com/otmof-ops/nudge.git && cd nudge && ./setup.sh --install --defaults
+git clone --branch v2.2.0 https://github.com/otmof-ops/nudge.git && cd nudge && ./setup.sh --install --defaults
 ```
 
 ## How It Works
@@ -90,11 +91,13 @@ git clone --branch v2.1.0 https://github.com/otmof-ops/nudge.git && cd nudge && 
 ```
 Login/Timer → nudge.sh → load config → acquire lock → schedule guard → delay →
 network probe (curl/wget/ping) → detect package manager → lock check →
-count updates (system + flatpak + snap) → if 0: exit → build preview with
-priority classification → show dialog → "Update Now": snapshot → terminal
-window: selection menu → upgrades (system, Flatpak, Snap) → reboot check |
-"Remind Later": defer → write duration | "Not Now": exit →
-write history → exit with named code
+count updates (system + flatpak + snap) → if 0: exit → classify by priority →
+show the prompt (the bunny, the counts, the first names) →
+"Update Now": what to install? (everything / critical + security / one source /
+the full list first / pick one by one) → terminal window: [the menu] → snapshot →
+upgrades (system, Flatpak, Snap) → reboot check |
+"Remind Me Later": when? (in an hour, tomorrow…) | "Not Now": exit →
+write history → exit with the named code (0 under login or timer)
 ```
 
 ## Architecture
@@ -109,12 +112,13 @@ nudge uses a modular library design — the main script is a ~500-line dispatche
 | `lib/network.sh` | Multi-method network probe (curl/wget/ping) |
 | `lib/pkgmgr.sh` | apt/dnf/pacman/zypper + flatpak + snap |
 | `lib/notify.sh` | dunstify/kdialog/zenity/gdbus/notify-send backends |
+| `lib/dialog.sh` | What the dialogs show: rich text and Pango bodies with the mascot, the scope picker, the full list, the deferral and restart dialogs |
 | `lib/schedule.sh` | Scheduling, interval guards, deferral |
 | `lib/history.sh` | JSONL history log and viewer |
 | `lib/safety.sh` | Pre-upgrade snapshots, reboot detection |
 | `lib/selfupdate.sh` | GitHub release self-update check |
 | `lib/errorreport.sh` | Crash reports and automated GitHub issue filing |
-| `lib/tui.sh` | TUI rendering primitives — bunny, menus, colors |
+| `lib/tui.sh` | TUI rendering — the palette (truecolor, 256 or 16 colours), frames, menus, the text bunny |
 | `lib/select.sh` | The selection menu — lists, subcategories, select-all, single packages |
 | `lib/bunny-poses.sh` | The mascot — faces and 11 ASCII art poses |
 | `lib/bunny-dialogue.sh` | 100+ rotating dialogue messages, random picker |
@@ -212,7 +216,8 @@ Legacy `install.sh` and `uninstall.sh` wrappers are still supported for backward
 | File | Purpose |
 |------|---------|
 | `~/.local/bin/nudge.sh` | Main dispatcher script (`~/.local/bin/nudge` links to it) |
-| `~/.local/lib/nudge/*.sh` | Library modules (16) |
+| `~/.local/lib/nudge/*.sh` | Library modules (17) |
+| `~/.local/lib/nudge/mascot/*.svg` | The Nudge Bunny's eight moods, drawn into the dialogs |
 | `~/.config/nudge/nudge.conf` | Configuration (32 keys) |
 | `~/.config/autostart/nudge.desktop` | XDG autostart entry |
 | `~/.config/systemd/user/nudge.timer` | systemd timer (if selected) |
@@ -268,7 +273,7 @@ Edit `~/.config/nudge/nudge.conf`:
 |--------|------|---------|-------------|
 | `NOTIFICATION_BACKEND` | enum | `auto` | `auto`/`kdialog`/`zenity`/`dunstify`/`gdbus`/`notify-send`/`none` |
 | `DUNST_APPNAME` | string | `nudge` | App name for dunst |
-| `PREVIEW_UPDATES` | bool | `true` | Show package list before prompting |
+| `PREVIEW_UPDATES` | bool | `true` | Show the first package names in the prompt (the full list is a row in the scope picker) |
 | `SECURITY_PRIORITY` | bool | `true` | Show critical/security packages first |
 
 ### Schedule Settings
@@ -367,13 +372,15 @@ nudge --migrate              # Run config migration
 | 12 | `EXIT_SNAPSHOT_FAILED` | Snapshot failed, aborted |
 | 13 | `EXIT_REBOOT_PENDING` | Reboot required |
 
+Under the login or timer trigger (the autostart entry and the systemd unit set `_NUDGE_TRIGGER`), the ordinary outcomes 1, 2, 4, 5, 6, 7, 9 and 13 exit 0, so the autostart service never shows as failed because you clicked Not Now, the package manager was busy, or a run was already open. The JSON and every history row keep the real code, and a manual run still exits with it. Failures (3, 8, 10, 11, 12) stay non-zero everywhere.
+
 ## JSON Output
 
 With `--json`, nudge emits a single JSON object:
 
 ```json
 {
-  "nudge_version": "2.1.0",
+  "nudge_version": "2.2.0",
   "timestamp": "2026-10-09T09:15:00+08:00",
   "exit_code": 2,
   "exit_reason": "UPDATES_APPLIED",
@@ -403,35 +410,51 @@ Use XDG autostart (default) or systemd user timer:
 ./install.sh --xdg       # Install with XDG autostart
 ```
 
+## The Dialogs
+
+<p align="center"><img src="docs/assets/screenshot-prompt.png" alt="the prompt: the bunny, 30 updates are ready, 2 critical, 2 security, the first names, Update Now / Remind Me Later / Not Now" width="640"></p>
+
+The prompt says how many updates there are and where from, flags the critical and security ones, lets the bunny say its line, and names the first few (critical and security first). Three buttons: **Update Now**, **Remind Me Later**, **Not Now**.
+
+<p align="center"><img src="docs/assets/screenshot-scope.png" alt="What should I install? Everything, critical and security only, one source, pick one by one, show the full list first" width="320">&nbsp;&nbsp;<img src="docs/assets/screenshot-defer.png" alt="When should I ask again? In an hour, in 4 hours, tomorrow, next week" width="320"></p>
+
+**Update Now** asks one more question: everything, the critical and security updates only, one source only (offered when there are several), **pick one by one** (the terminal menu below), or **show the full list first** (every update grouped by source, with versions). **Remind Me Later** asks when, in plain words, from `DEFERRAL_OPTIONS`. With `SELECT_UPDATES=false` there is no question: the prompt names the first few and Update Now installs everything.
+
+<p align="center"><img src="docs/assets/screenshot-list.png" alt="the full list: system packages with critical and security badges and versions, then Flatpak, then snaps" width="640"></p>
+
+kdialog draws all of this as rich text with the bunny in it; zenity shows the same text in Pango markup with the bunny as the window icon; dunstify, gdbus and notify-send get the plain text. Every package name is escaped before it reaches the markup (dunst's too), control characters are stripped, and `AUTO_DISMISS` closes the pickers as well as the prompt. The terminal the session opens in must be a known one owned by root: a read-only copy of the user's own does not count, because that window is where the sudo password is typed.
+
 ## The Selection Menu
 
-Accepting the dialog opens a terminal window. Everything is ticked to start with; untick a whole list, a subcategory, or single packages, then press Enter:
+Picking one by one opens a terminal window. Everything is ticked to start with; untick a whole list, a subcategory, or single packages, then press Enter:
+
+<p align="center"><img src="docs/assets/screenshot-terminal.png" alt="the selection menu in a terminal: system packages with critical, security and other subcategories, Flatpak, Snap, tick boxes and key hints" width="640"></p>
 
 ```text
     ◆ CHOOSE WHAT TO UPDATE
-    ────────────────────────────────────────────────────────
-     1) [x] System packages (apt)            108 of 108
-         1a) [x] Critical system packages       5 of 5
-         1b) [x] Security updates              64 of 64
-         1c) [x] Other updates                 39 of 39
-     2) [x] Flatpak                             3 of 3
-         2a) [x] Applications                   2 of 2
-         2b) [x] Runtimes                       1 of 1
-     3) [x] Snap                                2 of 2
-         3a) [x] Snaps                          2 of 2
-    ────────────────────────────────────────────────────────
-    a  select all     n  select none     1  toggle a list     1a  toggle a subcategory
-    v 1a  pick single packages inside a subcategory
-    Enter  update what is ticked     q  cancel, update nothing
+    ────────────────────────────────────────────────────────────
+     1) [✓] System packages (apt)              26 of 26
+         1a) [✓] ★ Critical system packages       2 of 2
+         1b) [✓] ⚠ Security updates               2 of 2
+         1c) [✓]   Other updates                 22 of 22
+     2) [✓] Flatpak                               2 of 2
+         2a) [✓] ◆ Applications                   1 of 1
+         2b) [✓] ◆ Runtimes                       1 of 1
+     3) [✓] Snap                                  2 of 2
+         3a) [✓] ● Snaps                          2 of 2
+    ────────────────────────────────────────────────────────────
+    a select all   n select none   1 toggle a list   1a toggle a subcategory
+    v 1a pick single packages inside a subcategory
+    Enter update what is ticked   q cancel, update nothing
 ```
 
-With every system package ticked, `UPDATE_COMMAND` runs as configured (a full upgrade). With a subset, only those packages are upgraded (`apt-get install --only-upgrade`, `dnf upgrade`, `zypper update`). Arch never partially upgrades, so on pacman the system list is all or nothing. Flatpak and Snap follow the same rule with `flatpak update` and `snap refresh`. Set `SELECT_UPDATES=false` to skip the menu.
+With every system package ticked, `UPDATE_COMMAND` runs as configured (a full upgrade). With a subset, only those packages are upgraded (`apt-get install --only-upgrade`, `dnf upgrade`, `zypper update`). Arch never partially upgrades, so on pacman the system list is all or nothing. Flatpak and Snap follow the same rule with `flatpak update` and `snap refresh`. Set `SELECT_UPDATES=false` to skip both the question and the menu and install everything. The terminal picks its palette by what it reports: truecolor, 256 colours, or the basic 16.
 
 ## The Nudge Bunny
 
 <p align="center"><img src="docs/assets/bunny-moods.svg" alt="the bunny's moods: normal, happy, wide, worried, sleepy, teary, crying" width="100%"></p>
 
-An SVG character drawn by [`docs/assets/make-mascot.sh`](docs/assets/make-mascot.sh); the same bunny is the dialog icon once installed. [docs/mascot.md](docs/mascot.md) has the moods, the assets and the text fallback.
+An SVG character drawn by [`docs/assets/make-mascot.sh`](docs/assets/make-mascot.sh) into `share/mascot/`; the dialogs draw it in the mood of the moment, and the same bunny is the app icon once installed. [docs/mascot.md](docs/mascot.md) has the moods, the assets and the text fallback.
 
 ## Development
 

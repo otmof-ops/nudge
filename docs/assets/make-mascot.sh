@@ -6,13 +6,15 @@
 # icon, the mood sheet and the social preview. Every asset comes from the same
 # shapes, so the bunny looks the same everywhere. Run from the repository root:
 #
-#   docs/assets/make-mascot.sh            # writes docs/assets/*.svg and share/icons/nudge.svg
+#   docs/assets/make-mascot.sh            # writes share/mascot/*.svg, share/icons/nudge.svg and docs/assets/*.svg
 
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 OUT="docs/assets"
 ICON_OUT="share/icons"
+MASCOT_OUT="share/mascot"   # the character files: the dialogs draw them, the docs link them
+mkdir -p "$OUT" "$ICON_OUT" "$MASCOT_OUT"
 
 # --- Palette ---
 FUR="#F6F3EC"
@@ -262,15 +264,15 @@ SVG
     } > "$file"
 }
 
-character "$OUT/bunny.svg" normal sit
-character "$OUT/bunny-happy.svg" happy sit
-character "$OUT/bunny-wide.svg" wide sit
-character "$OUT/bunny-worried.svg" worried sit
-character "$OUT/bunny-sleepy.svg" sleepy sit
-character "$OUT/bunny-teary.svg" teary sit
-character "$OUT/bunny-crying.svg" crying sit
-character "$OUT/bunny-wave.svg" happy wave
+character "$MASCOT_OUT/bunny.svg" normal sit
+character "$MASCOT_OUT/bunny-happy.svg" happy sit
+character "$MASCOT_OUT/bunny-wide.svg" wide sit
+character "$MASCOT_OUT/bunny-worried.svg" worried sit
+character "$MASCOT_OUT/bunny-sleepy.svg" sleepy sit
+character "$MASCOT_OUT/bunny-teary.svg" teary sit
+character "$MASCOT_OUT/bunny-crying.svg" crying sit
+character "$MASCOT_OUT/bunny-wave.svg" happy wave
 icon "$ICON_OUT/nudge.svg"
 sheet "$OUT/bunny-moods.svg"
 social "$OUT/social-preview.svg"
-echo "wrote: $OUT/bunny*.svg $ICON_OUT/nudge.svg $OUT/social-preview.svg"
+echo "wrote: $MASCOT_OUT/bunny*.svg $ICON_OUT/nudge.svg $OUT/bunny-moods.svg $OUT/social-preview.svg"

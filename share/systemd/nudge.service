@@ -15,9 +15,10 @@ ConditionEnvironment=|WAYLAND_DISPLAY
 Type=oneshot
 ExecStart=%h/.local/bin/nudge.sh
 Environment=_NUDGE_TRIGGER=timer
-# nudge's named exit codes for ordinary outcomes: declined, applied, disabled,
-# offline, deferred, reboot pending. None of them is a failed unit.
-SuccessExitStatus=1 2 4 5 9 13
+# A timer run exits 0 on the ordinary outcomes (declined, applied, disabled,
+# offline, the package manager busy, another run in progress, deferred,
+# reboot pending); the named codes are listed too for a nudge.sh older than 2.2.0.
+SuccessExitStatus=1 2 4 5 6 7 9 13
 
 [Install]
 WantedBy=default.target

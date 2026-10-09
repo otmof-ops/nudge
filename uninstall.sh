@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/nudge)
 # SPDX-License-Identifier: BSD-3-Clause
 # nudge uninstaller — delegates to setup.sh
-# Version: 2.1.0
+# Version: 2.2.0
 
 set -euo pipefail
 
