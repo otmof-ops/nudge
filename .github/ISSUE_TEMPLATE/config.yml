@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Safety Information
+    url: https://github.com/otmof-ops/nudge/blob/main/docs/SAFETY.md
+    about: Read the safety documentation before using nudge
+  - name: Security vulnerability
+    url: https://github.com/otmof-ops/nudge/security/advisories/new
+    about: Report privately through GitHub, never in a public issue

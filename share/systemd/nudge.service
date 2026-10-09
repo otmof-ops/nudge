@@ -1,0 +1,23 @@
+# nudge — system update check (systemd user service)
+# The display variables are not set here: the desktop session exports
+# DISPLAY, WAYLAND_DISPLAY and XAUTHORITY into the user manager (KDE and
+# GNOME do; otherwise run once in the session:
+#   systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XAUTHORITY).
+# Without a display the run is skipped quietly.
+[Unit]
+Description=nudge — system update check
+Documentation=man:nudge(1)
+After=graphical-session.target
+ConditionEnvironment=|DISPLAY
+ConditionEnvironment=|WAYLAND_DISPLAY
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/nudge.sh
+Environment=_NUDGE_TRIGGER=timer
+# nudge's named exit codes for ordinary outcomes: declined, applied, disabled,
+# offline, deferred, reboot pending. None of them is a failed unit.
+SuccessExitStatus=1 2 4 5 9 13
+
+[Install]
+WantedBy=default.target

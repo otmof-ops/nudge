@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions: {}
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Check the tag matches the scripts
+        run: |
+          v="${GITHUB_REF#refs/tags/v}"
+          grep -q "^NUDGE_VERSION=\"$v\"" nudge.sh
+          grep -q "^VERSION=\"$v\"" setup.sh
+
+      - name: Generate SHA256 checksums over every shipped file
+        run: |
+          {
+            printf '%s\n' LICENSE install.sh nudge.sh nudge.conf nudge.desktop setup.sh uninstall.sh \
+              share/systemd/nudge.timer share/systemd/nudge.service \
+              share/bash-completion/nudge share/man/nudge.1 share/icons/nudge.svg
+            ls lib/*.sh
+          } | xargs sha256sum > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          name: "nudge ${{ steps.version.outputs.version }}"
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            LICENSE
+            install.sh
+            nudge.sh
+            nudge.conf
+            nudge.desktop
+            setup.sh
+            uninstall.sh
+            share/systemd/nudge.timer
+            share/systemd/nudge.service
+            share/bash-completion/nudge
+            share/man/nudge.1
+            share/icons/nudge.svg
+            lib/*.sh
+            SHA256SUMS

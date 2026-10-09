@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-label="nudge: a gentle nudge to keep your system fresh">
+  <title>nudge</title>
+  <rect width="1280" height="640" fill="#FBFAF7"/>
+  <rect x="0" y="600" width="1280" height="40" fill="#2EA44F"/>
+  <g transform="translate(96 54) scale(1.7)">
+  <g id="body">
+    <circle cx="66" cy="246" r="10" fill="#F6F3EC" stroke="#C9C1B3" stroke-width="3"/>
+    <ellipse cx="120" cy="240" rx="50" ry="36" fill="#F6F3EC" stroke="#C9C1B3" stroke-width="3"/>
+    <ellipse cx="98" cy="270" rx="17" ry="8" fill="#F6F3EC" stroke="#C9C1B3" stroke-width="3"/>
+    <ellipse cx="142" cy="270" rx="17" ry="8" fill="#F6F3EC" stroke="#C9C1B3" stroke-width="3"/>
+    <path d="M90 268 v5 M98 269 v5 M106 268 v5 M134 268 v5 M142 269 v5 M150 268 v5" stroke="#C9C1B3" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="92" cy="238" r="11" fill="#F6F3EC" stroke="#C9C1B3" stroke-width="3"/>
+    <circle cx="148" cy="238" r="11" fill="#F6F3EC" stroke="#C9C1B3" stroke-width="3"/>
+    <g transform="translate(164 232)">
+      <circle r="17" fill="#2EA44F"/>
+      <path d="M-7 2 a8 8 0 1 1 3.5 6.5" stroke="#fff" stroke-width="3.2" fill="none" stroke-linecap="round"/>
+      <path d="M-5 9.5 l5.5 1.2 l-1 -5.6 z" fill="#fff"/>
+    </g>
+  </g>
+  <g id="ears" stroke="#C9C1B3" stroke-width="3">
+    <g transform="translate(96 118) rotate(-14)">
+      <rect x="-19" y="-118" width="38" height="124" rx="19" fill="#F6F3EC"/>
+      <rect x="-10" y="-102" width="20" height="92" rx="10" fill="#F9C3CE" stroke="none"/>
+    </g>
+    <g transform="translate(144 118) rotate(14)">
+      <rect x="-19" y="-118" width="38" height="124" rx="19" fill="#F6F3EC"/>
+      <rect x="-10" y="-102" width="20" height="92" rx="10" fill="#F9C3CE" stroke="none"/>
+    </g>
+  </g>
+  <g id="head">
+    <circle cx="120" cy="152" r="64" fill="#F6F3EC" stroke="#C9C1B3" stroke-width="3"/>
+    <ellipse cx="82" cy="170" rx="12" ry="7.5" fill="#F8C9D2"/>
+    <ellipse cx="158" cy="170" rx="12" ry="7.5" fill="#F8C9D2"/>
+    <g stroke="#C9C1B3" stroke-width="2.2" stroke-linecap="round" fill="none">
+      <path d="M68 158 H46 M68 165 L46 170 M68 151 L46 146"/>
+      <path d="M172 158 H194 M172 165 L194 170 M172 151 L194 146"/>
+    </g>
+    <path d="M113 161 H127 L120 169 Z" fill="#E78CA0"/>
+  </g>
+  <g id="face-happy">
+    <path d="M88 146 q10 -12 20 0 M132 146 q10 -12 20 0" stroke="#2B2B2B" stroke-width="4.2" fill="none" stroke-linecap="round"/>
+    <path d="M108 170 q12 12 24 0" stroke="#B96F80" stroke-width="2.8" fill="none" stroke-linecap="round"/>
+  </g>
+  </g>
+  <g font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" fill="#2B2B2B">
+    <text x="540" y="258" font-size="124" font-weight="800" letter-spacing="-4">nudge</text>
+    <text x="544" y="318" font-size="32" fill="#1F7A3A">a gentle nudge to keep your system fresh</text>
+    <text x="544" y="382" font-size="24" fill="#55524C">Consent-first update manager for Linux desktops.</text>
+    <text x="544" y="420" font-size="24" fill="#55524C">You pick what to update: system packages, Flatpak, Snap.</text>
+    <text x="544" y="486" font-size="20" fill="#7A766E">apt · dnf · pacman · zypper · Flatpak · Snap · pure bash · BSD 3-Clause</text>
+  </g>
+</svg>

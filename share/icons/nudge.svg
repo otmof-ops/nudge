@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="nudge">
+  <title>nudge</title>
+  <rect width="128" height="128" rx="30" fill="#2EA44F"/>
+  <g transform="translate(64 86) scale(0.52) translate(-120 -152)">
+  <g id="ears" stroke="#C9C1B3" stroke-width="3">
+    <g transform="translate(96 118) rotate(-14)">
+      <rect x="-19" y="-118" width="38" height="124" rx="19" fill="#F6F3EC"/>
+      <rect x="-10" y="-102" width="20" height="92" rx="10" fill="#F9C3CE" stroke="none"/>
+    </g>
+    <g transform="translate(144 118) rotate(14)">
+      <rect x="-19" y="-118" width="38" height="124" rx="19" fill="#F6F3EC"/>
+      <rect x="-10" y="-102" width="20" height="92" rx="10" fill="#F9C3CE" stroke="none"/>
+    </g>
+  </g>
+  <g id="head">
+    <circle cx="120" cy="152" r="64" fill="#F6F3EC" stroke="#C9C1B3" stroke-width="3"/>
+    <ellipse cx="82" cy="170" rx="12" ry="7.5" fill="#F8C9D2"/>
+    <ellipse cx="158" cy="170" rx="12" ry="7.5" fill="#F8C9D2"/>
+    <g stroke="#C9C1B3" stroke-width="2.2" stroke-linecap="round" fill="none">
+      <path d="M68 158 H46 M68 165 L46 170 M68 151 L46 146"/>
+      <path d="M172 158 H194 M172 165 L194 170 M172 151 L194 146"/>
+    </g>
+    <path d="M113 161 H127 L120 169 Z" fill="#E78CA0"/>
+  </g>
+  <g id="face-normal">
+    <circle cx="98" cy="144" r="7" fill="#2B2B2B"/><circle cx="100.5" cy="141.5" r="2.4" fill="#fff"/>
+    <circle cx="142" cy="144" r="7" fill="#2B2B2B"/><circle cx="144.5" cy="141.5" r="2.4" fill="#fff"/>
+    <path d="M120 169 q-4 7 -10 4 M120 169 q4 7 10 4" stroke="#B96F80" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+  </g>
+  </g>
+</svg>

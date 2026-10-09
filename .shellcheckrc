@@ -1,0 +1,7 @@
+# shellcheck settings for the whole repository
+source-path=SCRIPTDIR
+# SC1091 sourced files are checked on their own; SC2119/SC2120 optional-argument
+# helpers; SC2015 A && B || C used for one-line reporting; SC2129 grouped
+# redirects are a style choice; SC2004 $ in array indexes; SC2088 tildes in
+# display strings are intentional
+disable=SC1091,SC2119,SC2120,SC2015,SC2129,SC2004,SC2088

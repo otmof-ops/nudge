@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Nudge Update Checker
+Comment=A gentle nudge to keep your system fresh
+Icon=nudge
+Exec=env _NUDGE_TRIGGER=login "HOME_PLACEHOLDER/.local/bin/nudge.sh"
+Terminal=false
+NoDisplay=true
+X-KDE-autostart-phase=2
+X-KDE-AutostartScript=false

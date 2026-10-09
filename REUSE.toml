@@ -1,0 +1,11 @@
+# REUSE specification (https://reuse.software). One license for the whole tree.
+version = 1
+SPDX-PackageName = "nudge"
+SPDX-PackageSupplier = "Jay Taylor"
+SPDX-PackageDownloadLocation = "https://github.com/otmof-ops/nudge"
+
+[[annotations]]
+path = "**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Jay Taylor (https://github.com/otmof-ops/nudge)"
+SPDX-License-Identifier = "BSD-3-Clause"

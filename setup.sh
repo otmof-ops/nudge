@@ -1,0 +1,1460 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/nudge)
+# SPDX-License-Identifier: BSD-3-Clause
+# nudge — unified setup
+# Install, uninstall, configure, update, and status — all in one place.
+# Version: 2.1.0
+
+# shellcheck disable=SC2034  # NUDGE_VERSION is read by selfupdate.sh
+set -euo pipefail
+
+VERSION="2.1.0"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# --- Find the libraries: the checkout's lib/, or an installed copy's ---
+_SETUP_LIB_DIR=""
+for _cand in "$SCRIPT_DIR/lib" "$SCRIPT_DIR/../lib/nudge" "${HOME}/.local/lib/nudge"; do
+    if [[ -f "$_cand/output.sh" ]]; then
+        _SETUP_LIB_DIR="$(cd "$_cand" && pwd)"
+        break
+    fi
+done
+
+# --- Bootstrap: piped execution fallback (nothing of nudge on this machine yet) ---
+if [[ -z "$_SETUP_LIB_DIR" ]]; then
+    case "${1:-}" in
+        --version) echo "nudge setup $VERSION"; exit 0 ;;
+        --help|-h) echo "nudge setup $VERSION — run from a checkout or an installed copy for the full help"; exit 0 ;;
+    esac
+    _SETUP_TMPDIR=$(mktemp -d)
+    echo "Downloading nudge..."
+    if command -v git &>/dev/null; then
+        git clone --quiet --depth 1 --branch main https://github.com/otmof-ops/nudge.git "$_SETUP_TMPDIR/nudge" || {
+            echo "Error: could not clone https://github.com/otmof-ops/nudge" >&2
+            rm -rf "$_SETUP_TMPDIR"
+            exit 4
+        }
+    elif command -v curl &>/dev/null; then
+        curl -fsSL --proto '=https' --proto-redir '=https' --max-time 120 https://github.com/otmof-ops/nudge/archive/refs/heads/main.tar.gz | tar xz -C "$_SETUP_TMPDIR" || {
+            echo "Error: could not download https://github.com/otmof-ops/nudge" >&2
+            rm -rf "$_SETUP_TMPDIR"
+            exit 4
+        }
+        mv "$_SETUP_TMPDIR"/nudge-main "$_SETUP_TMPDIR/nudge"
+    else
+        echo "Error: git or curl required for remote install" >&2
+        rm -rf "$_SETUP_TMPDIR"
+        exit 4
+    fi
+    # The child cleans the directory up; it is handed over in the environment, not as a flag
+    NUDGE_BOOTSTRAP_TMPDIR="$_SETUP_TMPDIR" exec bash "$_SETUP_TMPDIR/nudge/setup.sh" "$@"
+fi
+
+# --- Source libraries ---
+source "$_SETUP_LIB_DIR/output.sh"
+source "$_SETUP_LIB_DIR/config.sh"
+source "$_SETUP_LIB_DIR/selfupdate.sh"
+source "$_SETUP_LIB_DIR/tui.sh"
+source "$_SETUP_LIB_DIR/bunny-poses.sh"
+
+# --- Defaults ---
+_MODE=""
+_USE_DEFAULTS=false
+_UNATTENDED=false
+_DRY_RUN=false
+_KEEP_CONFIG=false
+_UPGRADE=false
+_UPDATE_CHECK_ONLY=false
+_TUI_NO_COLOR=false
+_PREFIX="${HOME}"
+_AUTOSTART_METHOD="auto"
+_IS_REINSTALL=false
+_CONFIGURE_RETURN="MAIN_MENU"
+_RUN_AFTER_INSTALL=false
+_BOOTSTRAP_TMPDIR=""
+_STATE="MAIN_MENU"
+_CFG_INITIALISED=false
+# A bootstrap handover must be a fresh temporary directory of our own
+if [[ -n "${NUDGE_BOOTSTRAP_TMPDIR:-}" ]] && [[ "$NUDGE_BOOTSTRAP_TMPDIR" == "${TMPDIR:-/tmp}"/tmp.* ]] \
+   && [[ -d "$NUDGE_BOOTSTRAP_TMPDIR" && ! -L "$NUDGE_BOOTSTRAP_TMPDIR" ]] \
+   && [[ "$(stat -c %u "$NUDGE_BOOTSTRAP_TMPDIR" 2>/dev/null)" == "$UID" ]]; then
+    _BOOTSTRAP_TMPDIR="$NUDGE_BOOTSTRAP_TMPDIR"
+fi
+
+# --- Exit codes ---
+readonly _EXIT_OK=0
+readonly _EXIT_CANCELLED=1
+readonly _EXIT_DETECT_FAIL=2
+readonly _EXIT_ACTION_FAIL=3
+readonly _EXIT_INVALID_ARGS=4
+
+# --- Parse CLI flags ---
+for arg in "$@"; do
+    case "$arg" in
+        --install)       _MODE="install" ;;
+        --uninstall)     _MODE="uninstall" ;;
+        --update)        _MODE="update" ;;
+        --config-only)   _MODE="config-only" ;;
+        --defaults)      _USE_DEFAULTS=true ;;
+        --unattended)    _UNATTENDED=true; _USE_DEFAULTS=true ;;
+        --dry-run)       _DRY_RUN=true ;;
+        --keep-config)   _KEEP_CONFIG=true ;;
+        --upgrade)       _UPGRADE=true ;;
+        --check)         _UPDATE_CHECK_ONLY=true ;;
+        --no-color)      _TUI_NO_COLOR=true ;;
+        --systemd)       _AUTOSTART_METHOD="systemd" ;;
+        --xdg)           _AUTOSTART_METHOD="xdg" ;;
+        --prefix=*)      _PREFIX="${arg#--prefix=}" ;;
+        --yes|-y)        _UNATTENDED=true ;;
+        --version)
+            echo "nudge setup $VERSION"
+            exit 0
+            ;;
+        --help|-h)
+            cat <<'HELPTEXT'
+ (\__/)
+ (='.'=)  nudge setup 2.1.0
+ (")_(")  unified installer, updater, and configurator
+
+Usage: setup.sh [OPTIONS]
+
+  No flags          Launch interactive TUI
+  --install         Install nudge
+  --uninstall       Uninstall nudge
+  --update          Check and install updates
+  --config-only     Open configure flow only
+
+Install options:
+  --defaults        Use smart defaults, skip prompts
+  --unattended      Non-interactive (implies --defaults)
+  --upgrade         Preserve existing config
+  --systemd         Use systemd user timer
+  --xdg             Use XDG autostart
+  --prefix=PATH     Custom install prefix (default: $HOME)
+
+Uninstall options:
+  --yes, -y         Skip confirmation
+  --keep-config     Preserve config directory
+
+Update options:
+  --check           Just check, print version, exit
+
+General:
+  --dry-run         Show what would happen, change nothing
+  --no-color        Disable ANSI colors
+  --version         Print version and exit
+  --help, -h        Show this help
+HELPTEXT
+            exit 0
+            ;;
+        *)
+            echo "Unknown flag: $arg" >&2
+            echo "Run setup.sh --help for usage." >&2
+            exit "$_EXIT_INVALID_ARGS"
+            ;;
+    esac
+done
+
+# --- The install prefix: an absolute directory, ~ expanded ---
+_PREFIX="${_PREFIX/#\~/$HOME}"
+_PREFIX="${_PREFIX%/}"
+if [[ -z "$_PREFIX" || "$_PREFIX" != /* ]]; then
+    echo "Error: --prefix must be an absolute path (got '${_PREFIX}')" >&2
+    exit "$_EXIT_INVALID_ARGS"
+fi
+# systemd and the runtime lock are the live account's; only touch them for a real install
+_LIVE_PREFIX=false
+[[ "$_PREFIX" == "$HOME" ]] && _LIVE_PREFIX=true
+
+# --- Initialize TUI ---
+_tui_init
+
+# --- Detection functions ---
+# Same order as lib/notify.sh, so the install screen shows what nudge will use
+_detect_backend() {
+    if command -v dunstify &>/dev/null && pgrep -x dunst &>/dev/null; then echo "dunstify"
+    elif command -v kdialog &>/dev/null && [[ -n "${KDE_SESSION_VERSION:-}" ]]; then echo "kdialog"
+    elif command -v zenity &>/dev/null; then echo "zenity"
+    elif command -v kdialog &>/dev/null; then echo "kdialog"
+    elif command -v dunstify &>/dev/null; then echo "dunstify"
+    elif command -v gdbus &>/dev/null; then echo "gdbus"
+    elif command -v notify-send &>/dev/null; then echo "notify-send"
+    else echo "none"
+    fi
+}
+
+# Same list as lib/pkgmgr.sh
+_detect_terminal() {
+    local t
+    for t in konsole gnome-terminal xfce4-terminal alacritty kitty foot wezterm tilix terminator x-terminal-emulator xterm; do
+        if command -v "$t" &>/dev/null; then echo "$t"; return; fi
+    done
+    echo "none"
+}
+
+_detect_de() {
+    if [[ -n "${XDG_CURRENT_DESKTOP:-}" ]]; then echo "$XDG_CURRENT_DESKTOP"
+    elif [[ -n "${DESKTOP_SESSION:-}" ]]; then echo "$DESKTOP_SESSION"
+    else echo "unknown"
+    fi
+}
+
+_detect_pkgmgr() {
+    if command -v apt &>/dev/null && [[ -d /var/lib/dpkg ]]; then echo "apt"
+    elif command -v dnf &>/dev/null; then echo "dnf"
+    elif command -v pacman &>/dev/null; then echo "pacman"
+    elif command -v zypper &>/dev/null; then echo "zypper"
+    else echo "unknown"
+    fi
+}
+
+_detect_all() {
+    _DETECTED_BACKEND=$(_detect_backend)
+    _DETECTED_TERMINAL=$(_detect_terminal)
+    _DETECTED_DE=$(_detect_de)
+    _DETECTED_PKG=$(_detect_pkgmgr)
+    _HAVE_FLATPAK=false
+    _HAVE_SNAP=false
+    _HAVE_TIMESHIFT=false
+    _HAVE_SNAPPER=false
+    command -v flatpak &>/dev/null && _HAVE_FLATPAK=true
+    command -v snap &>/dev/null && _HAVE_SNAP=true
+    command -v timeshift &>/dev/null && _HAVE_TIMESHIFT=true
+    command -v snapper &>/dev/null && _HAVE_SNAPPER=true
+    return 0
+}
+
+# --- Bunny farewell art ---
+_bunny_farewell() {
+    local face="${1:-$BUNNY_FACE_CRYING}"
+    local msg="${2:-}"
+    bunny_pose "farewell" "$face" "$msg"
+    echo ""
+}
+
+# --- Config defaults ---
+_init_config_defaults() {
+    # Once per run: edits made in Configure before an install must survive
+    [[ "$_CFG_INITIALISED" == "true" ]] && return 0
+    _CFG_INITIALISED=true
+    CFG_ENABLED=true
+    CFG_DELAY=45
+    CFG_CHECK_SECURITY=true
+    CFG_AUTO_DISMISS=0
+    CFG_UPDATE_COMMAND="sudo apt update && sudo apt full-upgrade"
+    CFG_NETWORK_HOST="archive.ubuntu.com"
+    CFG_NETWORK_TIMEOUT=5
+    CFG_NETWORK_RETRIES=2
+    CFG_NOTIFICATION_BACKEND="auto"
+    CFG_LOG_FILE=""
+    CFG_SCHEDULE_MODE="login"
+    CFG_SCHEDULE_INTERVAL_HOURS=24
+    CFG_HISTORY_ENABLED=true
+    CFG_HISTORY_MAX_LINES=500
+    CFG_FLATPAK_ENABLED="auto"
+    CFG_SNAP_ENABLED="auto"
+    CFG_PREVIEW_UPDATES=true
+    CFG_SECURITY_PRIORITY=true
+    CFG_REBOOT_CHECK=true
+    CFG_SNAPSHOT_ENABLED=false
+    CFG_SNAPSHOT_TOOL="auto"
+    CFG_SELF_UPDATE_CHECK=true
+    CFG_SELF_UPDATE_CHANNEL="stable"
+    CFG_OFFLINE_MODE="skip"
+    CFG_DEFERRAL_OPTIONS="1h,4h,1d"
+    CFG_PKGMGR_OVERRIDE=""
+    CFG_DUNST_APPNAME="nudge"
+    CFG_JSON_OUTPUT=false
+    CFG_LOG_LEVEL="info"
+    CFG_BUNNY_PERSONALITY="disney"
+    CFG_TERMINAL_EMULATOR="auto"
+    CFG_CRITICAL_PACKAGES_EXTRA=""
+    CFG_SELECT_UPDATES=true
+
+    case "${_DETECTED_PKG:-apt}" in
+        apt)    CFG_UPDATE_COMMAND="sudo apt update && sudo apt full-upgrade" ;;
+        dnf)    CFG_UPDATE_COMMAND="sudo dnf upgrade -y" ;;
+        pacman) CFG_UPDATE_COMMAND="sudo pacman -Syu --noconfirm" ;;
+        zypper) CFG_UPDATE_COMMAND="sudo zypper update -y" ;;
+    esac
+}
+
+# --- Config categories ---
+declare -A CONFIG_CATEGORIES=(
+    [core]="ENABLED DELAY CHECK_SECURITY AUTO_DISMISS UPDATE_COMMAND SELECT_UPDATES CONF_VERSION"
+    [notification]="NOTIFICATION_BACKEND DUNST_APPNAME PREVIEW_UPDATES SECURITY_PRIORITY BUNNY_PERSONALITY"
+    [network]="NETWORK_HOST NETWORK_TIMEOUT NETWORK_RETRIES OFFLINE_MODE"
+    [schedule]="SCHEDULE_MODE SCHEDULE_INTERVAL_HOURS DEFERRAL_OPTIONS"
+    [packages]="PKGMGR_OVERRIDE FLATPAK_ENABLED SNAP_ENABLED CRITICAL_PACKAGES_EXTRA"
+    [safety]="REBOOT_CHECK SNAPSHOT_ENABLED SNAPSHOT_TOOL"
+    [updates]="SELF_UPDATE_CHECK SELF_UPDATE_CHANNEL"
+    [logging]="HISTORY_ENABLED HISTORY_MAX_LINES LOG_FILE LOG_LEVEL JSON_OUTPUT"
+    [terminal]="TERMINAL_EMULATOR"
+)
+
+_CATEGORY_NAMES=(core notification network schedule packages safety updates logging terminal)
+_CATEGORY_LABELS=("Core settings" "Notifications" "Network" "Schedule" "Package managers" "Safety" "Updates & auto-update" "Logging" "Terminal")
+
+# --- Load existing config ---
+_load_existing_config() {
+    local conf="${_PREFIX}/.config/nudge/nudge.conf"
+    [[ ! -f "$conf" ]] && conf="${_PREFIX}/.config/nudge.conf"
+    if [[ -f "$conf" ]]; then
+        while IFS= read -r line; do
+            line="${line#"${line%%[![:space:]]*}"}"
+            [[ -z "$line" ]] && continue
+            [[ "$line" == \#* ]] && continue
+            if [[ "$line" =~ ^([A-Z_]+)=(.*)$ ]]; then
+                local key="${BASH_REMATCH[1]}"
+                local value="${BASH_REMATCH[2]}"
+                # Strip surrounding quotes only; quotes inside a value are part of it
+                if [[ "$value" =~ ^\"(.*)\"$ ]]; then
+                    value="${BASH_REMATCH[1]}"
+                elif [[ "$value" =~ ^\'(.*)\'$ ]]; then
+                    value="${BASH_REMATCH[1]}"
+                fi
+                printf -v "CFG_$key" '%s' "$value" 2>/dev/null || true
+            fi
+        done < "$conf"
+        return 0
+    fi
+    return 1
+}
+
+# --- Edit a single config key ---
+_edit_config_key() {
+    local key="$1"
+    local current_var="CFG_${key}"
+    local current="${!current_var:-${CONFIG_DEFAULTS[$key]:-}}"
+    local type="${CONFIG_TYPES[$key]:-string}"
+
+    case "$type" in
+        bool)
+            if [[ "$current" == "true" ]]; then
+                printf -v "$current_var" '%s' "false"
+                _tui_info "$key = false"
+            else
+                printf -v "$current_var" '%s' "true"
+                _tui_info "$key = true"
+            fi
+            ;;
+        enum:*)
+            local valid="${type#enum:}"
+            IFS=',' read -ra opts <<< "$valid"
+            local result
+            result=$(_tui_choice "$key:" "$current" "${opts[@]}")
+            printf -v "$current_var" '%s' "$result"
+            _tui_info "$key = $result"
+            ;;
+        int)
+            local result
+            result=$(_tui_input "$key" "$current")
+            if [[ "$result" =~ ^[0-9]+$ ]]; then
+                printf -v "$current_var" '%s' "$result"
+                _tui_info "$key = $result"
+            else
+                _tui_warn "Invalid integer, keeping $current"
+            fi
+            ;;
+        string)
+            local result
+            result=$(_tui_input "$key" "$current")
+            if [[ "$key" == "UPDATE_COMMAND" ]] && ! config_parse_update_command "$result" >/dev/null; then
+                _tui_warn "Not accepted: ${_UPDATE_COMMAND_ERROR:-not a plain package-manager command}. Keeping: $current"
+            elif ! config_validate_value "$key" "$result" 2>/dev/null; then
+                _tui_warn "Not accepted for $key. Keeping: $current"
+            else
+                printf -v "$current_var" '%s' "$result"
+                _tui_info "$key = $result"
+            fi
+            ;;
+    esac
+}
+
+# --- Action functions ---
+
+# Copy a template, replacing one literal token with a literal value (no sed grammar)
+# Usage: _copy_with_replacement <src> <dest> <token> <value>
+_copy_with_replacement() {
+    local src="$1" dest="$2" token="$3" value="$4" line
+    {
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            printf '%s\n' "${line//"$token"/$value}"
+        done < "$src"
+    } > "$dest" || return 1
+}
+
+_action_create_dirs() {
+    local dirs=(
+        "${_PREFIX}/.local/bin"
+        "${_PREFIX}/.local/lib/nudge"
+        "${_PREFIX}/.config/nudge"
+        "${_PREFIX}/.local/share/nudge"
+        "${_PREFIX}/.config/autostart"
+        "${_PREFIX}/.local/share/icons/hicolor/scalable/apps"
+    )
+    local d
+    for d in "${dirs[@]}"; do
+        if [[ "$_DRY_RUN" == "true" ]]; then
+            _tui_info "[dry-run] mkdir -p $d"
+        else
+            mkdir -p "$d" || { _tui_error "Cannot create $d"; return 1; }
+        fi
+    done
+    if [[ -n "$CFG_LOG_FILE" ]]; then
+        if [[ "$_DRY_RUN" == "true" ]]; then
+            _tui_info "[dry-run] mkdir -p $(dirname "$CFG_LOG_FILE")"
+        else
+            mkdir -p "$(dirname "$CFG_LOG_FILE")" || { _tui_error "Cannot create the log directory for $CFG_LOG_FILE"; return 1; }
+        fi
+    fi
+    return 0
+}
+
+_action_backup_config() {
+    local old_config="${_PREFIX}/.config/nudge/nudge.conf"
+    [[ ! -f "$old_config" ]] && old_config="${_PREFIX}/.config/nudge.conf"
+    if [[ -f "$old_config" ]]; then
+        local backup
+        backup="${old_config}.bak.$(date +%Y%m%d%H%M%S)"
+        if [[ "$_DRY_RUN" == "true" ]]; then
+            _tui_info "[dry-run] backup $old_config → $backup"
+        else
+            cp "$old_config" "$backup" || { _tui_error "Cannot back up $old_config"; return 1; }
+            _tui_warn "Config backed up to: $backup"
+        fi
+    fi
+    return 0
+}
+
+_action_write_config() {
+    local config_file="${_PREFIX}/.config/nudge/nudge.conf"
+    if [[ "$_DRY_RUN" == "true" ]]; then
+        _tui_info "[dry-run] write config → $config_file"
+        return
+    fi
+    # Hand the CFG_* values to config.sh's writer: one format, one writer,
+    # every key (an upgrade used to drop keys this file did not know about)
+    local key var
+    for key in "${!CONFIG_DEFAULTS[@]}"; do
+        var="CFG_${key}"
+        printf -v "$key" '%s' "${!var:-${CONFIG_DEFAULTS[$key]}}"
+    done
+    config_write "$config_file" || {
+        _tui_error "Could not write $config_file"
+        return 1
+    }
+    _tui_info "Written: ~/.config/nudge/nudge.conf"
+}
+
+_action_install_scripts() {
+    if [[ "$_DRY_RUN" == "true" ]]; then
+        _tui_info "[dry-run] copy nudge.sh → ~/.local/bin/nudge.sh (and link nudge)"
+        _tui_info "[dry-run] copy lib/*.sh → ~/.local/lib/nudge/"
+        _tui_info "[dry-run] copy setup.sh → ~/.local/bin/nudge-setup.sh"
+        return 0
+    fi
+    # New inode each time (cp then mv), so a running nudge keeps its old file
+    _install_file "${SCRIPT_DIR}/nudge.sh" "${_PREFIX}/.local/bin/nudge.sh" 0755 || return 1
+    ln -sfn nudge.sh "${_PREFIX}/.local/bin/nudge" || return 1
+    _tui_info "Installed: ~/.local/bin/nudge.sh (and the nudge command)"
+
+    local f
+    for f in "${SCRIPT_DIR}"/lib/*.sh; do
+        _install_file "$f" "${_PREFIX}/.local/lib/nudge/$(basename "$f")" 0644 || return 1
+    done
+    local mod_count
+    mod_count=$(find "${_PREFIX}/.local/lib/nudge/" -name '*.sh' | wc -l)
+    _tui_info "Installed: ~/.local/lib/nudge/ — ${mod_count} modules"
+
+    _install_file "${SCRIPT_DIR}/setup.sh" "${_PREFIX}/.local/bin/nudge-setup.sh" 0755 || return 1
+    _tui_info "Installed: ~/.local/bin/nudge-setup.sh"
+    return 0
+}
+
+# Usage: _install_file <src> <dest> <mode>
+_install_file() {
+    local src="$1" dest="$2" mode="$3"
+    cp "$src" "${dest}.new" && chmod "$mode" "${dest}.new" && mv -f "${dest}.new" "$dest" || {
+        rm -f "${dest}.new" 2>/dev/null
+        _tui_error "Cannot install $dest"
+        return 1
+    }
+}
+
+_action_install_autostart() {
+    local method="${_AUTOSTART_METHOD}"
+    if [[ "$method" == "auto" ]]; then
+        method="xdg"
+        # An upgrade keeps the method the existing install chose
+        if [[ -f "${_PREFIX}/.config/systemd/user/nudge.timer" ]] \
+           && [[ ! -f "${_PREFIX}/.config/autostart/nudge.desktop" ]]; then
+            method="systemd"
+        fi
+    fi
+
+    if [[ "$method" == "systemd" ]]; then
+        if [[ "$_DRY_RUN" == "true" ]]; then
+            _tui_info "[dry-run] install systemd user timer"
+            return 0
+        fi
+        mkdir -p "${_PREFIX}/.config/systemd/user" || return 1
+        local hours="${CFG_SCHEDULE_INTERVAL_HOURS:-24}"
+        [[ "$hours" =~ ^[1-9][0-9]{0,4}$ ]] || hours=24
+        local timer_interval="${hours}h"
+        [[ "$CFG_SCHEDULE_MODE" == "weekly" ]] && timer_interval="$((10#$hours * 7))h"
+        _copy_with_replacement "${SCRIPT_DIR}/share/systemd/nudge.timer" "${_PREFIX}/.config/systemd/user/nudge.timer" \
+            "OnUnitActiveSec=24h" "OnUnitActiveSec=${timer_interval}" || return 1
+        _copy_with_replacement "${SCRIPT_DIR}/share/systemd/nudge.service" "${_PREFIX}/.config/systemd/user/nudge.service" \
+            "%h" "${_PREFIX}" || return 1
+        if [[ "$_LIVE_PREFIX" == "true" ]] && command -v systemctl &>/dev/null; then
+            systemctl --user daemon-reload 2>/dev/null || true
+            if systemctl --user enable --now nudge.timer 2>/dev/null; then
+                _tui_info "Installed: systemd user timer (enabled)"
+            else
+                _tui_warn "Installed the systemd unit files, but enabling the timer failed; run: systemctl --user enable --now nudge.timer"
+            fi
+        else
+            _tui_info "Installed: systemd user timer files"
+        fi
+        rm -f "${_PREFIX}/.config/autostart/nudge.desktop" 2>/dev/null || true
+    else
+        if [[ "$_DRY_RUN" == "true" ]]; then
+            _tui_info "[dry-run] install XDG autostart entry"
+            return 0
+        fi
+        _copy_with_replacement "${SCRIPT_DIR}/nudge.desktop" "${_PREFIX}/.config/autostart/nudge.desktop" \
+            "HOME_PLACEHOLDER" "${_PREFIX}" || return 1
+        if [[ "$_LIVE_PREFIX" == "true" ]] && command -v systemctl &>/dev/null; then
+            systemctl --user disable --now nudge.timer 2>/dev/null || true
+        fi
+        rm -f "${_PREFIX}/.config/systemd/user/nudge.timer" 2>/dev/null || true
+        rm -f "${_PREFIX}/.config/systemd/user/nudge.service" 2>/dev/null || true
+        _tui_info "Installed: ~/.config/autostart/nudge.desktop"
+    fi
+    _AUTOSTART_EFFECTIVE="$method"
+    return 0
+}
+_AUTOSTART_EFFECTIVE=""
+
+_action_install_completion() {
+    if [[ -f "${SCRIPT_DIR}/share/bash-completion/nudge" ]]; then
+        local comp_dir="${_PREFIX}/.local/share/bash-completion/completions"
+        if [[ "$_DRY_RUN" == "true" ]]; then
+            _tui_info "[dry-run] install bash completion"
+            return 0
+        fi
+        mkdir -p "$comp_dir" || return 1
+        _install_file "${SCRIPT_DIR}/share/bash-completion/nudge" "${comp_dir}/nudge" 0644 || return 1
+        _tui_info "Installed: bash completion"
+    fi
+    return 0
+}
+
+_action_install_man() {
+    if [[ -f "${SCRIPT_DIR}/share/man/nudge.1" ]]; then
+        local man_dir="${_PREFIX}/.local/share/man/man1"
+        if [[ "$_DRY_RUN" == "true" ]]; then
+            _tui_info "[dry-run] install man page"
+            return 0
+        fi
+        mkdir -p "$man_dir" || return 1
+        _install_file "${SCRIPT_DIR}/share/man/nudge.1" "${man_dir}/nudge.1" 0644 || return 1
+        mandb -q 2>/dev/null || true
+        _tui_info "Installed: man page"
+    fi
+    return 0
+}
+
+# The Nudge Bunny as the dialog and desktop icon (hicolor theme, scalable)
+_action_install_icon() {
+    if [[ -f "${SCRIPT_DIR}/share/icons/nudge.svg" ]]; then
+        local icon_dir="${_PREFIX}/.local/share/icons/hicolor/scalable/apps"
+        if [[ "$_DRY_RUN" == "true" ]]; then
+            _tui_info "[dry-run] install the nudge icon"
+            return 0
+        fi
+        mkdir -p "$icon_dir" || return 1
+        _install_file "${SCRIPT_DIR}/share/icons/nudge.svg" "${icon_dir}/nudge.svg" 0644 || return 1
+        _tui_info "Installed: icon (the Nudge Bunny)"
+    fi
+    return 0
+}
+
+_action_stamp_version() {
+    if [[ "$_DRY_RUN" == "true" ]]; then
+        _tui_info "[dry-run] stamp version $VERSION"
+        return 0
+    fi
+    echo "$VERSION" > "${_PREFIX}/.config/nudge.version" || { _tui_error "Cannot write the version stamp"; return 1; }
+    _tui_info "Version: $VERSION"
+    return 0
+}
+
+# The install, step by step; the first failure stops it
+_install_steps() {
+    _action_create_dirs || return 1
+    _action_backup_config || return 1
+    _action_write_config || return 1
+    _action_install_scripts || return 1
+    _action_install_autostart || return 1
+    _action_install_completion || return 1
+    _action_install_man || return 1
+    _action_install_icon || return 1
+    _action_stamp_version || return 1
+    return 0
+}
+
+_action_verify() {
+    if [[ "$_DRY_RUN" == "true" ]]; then
+        _tui_info "[dry-run] verify nudge.sh --version"
+        return
+    fi
+    if "${_PREFIX}/.local/bin/nudge.sh" --version &>/dev/null; then
+        _tui_info "Verification passed"
+    else
+        _tui_warn "Verification: nudge.sh --version returned non-zero"
+    fi
+}
+
+# A checkout of nudge, and nothing we must never delete (home, its parents, the bin dir)
+_is_nudge_source_dir() {
+    local dir="$1"
+    [[ -d "$dir" && -f "$dir/nudge.sh" && -d "$dir/lib" && -f "$dir/setup.sh" && -f "$dir/REUSE.toml" && -d "$dir/.git" ]] || return 1
+    local real home
+    real=$(cd "$dir" && pwd -P) || return 1
+    home=$(cd "$HOME" && pwd -P) || return 1
+    case "$real" in
+        /|"$home"|"$home"/.local|"$home"/.local/bin|"$home"/.local/lib) return 1 ;;
+    esac
+    [[ "$home" == "$real"/* ]] && return 1
+    return 0
+}
+
+_action_uninstall() {
+    # Disable systemd timer
+    if [[ "$_LIVE_PREFIX" == "true" ]] && command -v systemctl &>/dev/null; then
+        if systemctl --user is-enabled nudge.timer &>/dev/null; then
+            if [[ "$_DRY_RUN" != "true" ]]; then
+                systemctl --user stop nudge.timer 2>/dev/null || true
+                systemctl --user disable nudge.timer 2>/dev/null || true
+            else
+                _tui_info "[dry-run] disable systemd timer"
+            fi
+        fi
+    fi
+
+    local files_to_remove=()
+    local dirs_to_remove=()
+
+    [[ -f "${_PREFIX}/.local/bin/nudge.sh" ]] && files_to_remove+=("${_PREFIX}/.local/bin/nudge.sh")
+    [[ -L "${_PREFIX}/.local/bin/nudge" ]] && files_to_remove+=("${_PREFIX}/.local/bin/nudge")
+    [[ -f "${_PREFIX}/.local/bin/nudge-setup.sh" ]] && files_to_remove+=("${_PREFIX}/.local/bin/nudge-setup.sh")
+    [[ -d "${_PREFIX}/.local/lib/nudge" ]] && dirs_to_remove+=("${_PREFIX}/.local/lib/nudge")
+    [[ -f "${_PREFIX}/.config/autostart/nudge.desktop" ]] && files_to_remove+=("${_PREFIX}/.config/autostart/nudge.desktop")
+    [[ -f "${_PREFIX}/.config/systemd/user/nudge.timer" ]] && files_to_remove+=("${_PREFIX}/.config/systemd/user/nudge.timer")
+    [[ -f "${_PREFIX}/.config/systemd/user/nudge.service" ]] && files_to_remove+=("${_PREFIX}/.config/systemd/user/nudge.service")
+    [[ -f "${_PREFIX}/.config/nudge.version" ]] && files_to_remove+=("${_PREFIX}/.config/nudge.version")
+    [[ -f "${_PREFIX}/.local/share/bash-completion/completions/nudge" ]] && files_to_remove+=("${_PREFIX}/.local/share/bash-completion/completions/nudge")
+    [[ -f "${_PREFIX}/.local/share/man/man1/nudge.1" ]] && files_to_remove+=("${_PREFIX}/.local/share/man/man1/nudge.1")
+    [[ -f "${_PREFIX}/.local/share/icons/hicolor/scalable/apps/nudge.svg" ]] && files_to_remove+=("${_PREFIX}/.local/share/icons/hicolor/scalable/apps/nudge.svg")
+
+    if [[ "$_LIVE_PREFIX" == "true" ]]; then
+        local lock="${XDG_RUNTIME_DIR:-/tmp}/nudge-${UID}.lock"
+        [[ -f "$lock" ]] && files_to_remove+=("$lock")
+    fi
+
+    # --keep-config keeps the history and state too; they are the user's records
+    if [[ "$_KEEP_CONFIG" != "true" ]]; then
+        [[ -d "${_PREFIX}/.local/share/nudge" ]] && dirs_to_remove+=("${_PREFIX}/.local/share/nudge")
+        [[ -d "${_PREFIX}/.config/nudge" ]] && dirs_to_remove+=("${_PREFIX}/.config/nudge")
+        [[ -f "${_PREFIX}/.config/nudge.conf" ]] && files_to_remove+=("${_PREFIX}/.config/nudge.conf")
+    fi
+
+    if [[ $(( ${#files_to_remove[@]} + ${#dirs_to_remove[@]} )) -eq 0 ]]; then
+        _tui_info "No nudge files found — nothing to remove."
+        return 0
+    fi
+
+    for f in "${files_to_remove[@]}"; do
+        if [[ "$_DRY_RUN" == "true" ]]; then
+            _tui_info "[dry-run] remove: $f"
+        else
+            rm -f "$f"
+            _tui_info "Removed: $f"
+        fi
+    done
+    for d in "${dirs_to_remove[@]}"; do
+        if [[ "$_DRY_RUN" == "true" ]]; then
+            _tui_info "[dry-run] remove: $d/"
+        else
+            rm -rf "$d"
+            _tui_info "Removed: $d/"
+        fi
+    done
+
+    if [[ "$_LIVE_PREFIX" == "true" ]] && command -v systemctl &>/dev/null && [[ "$_DRY_RUN" != "true" ]]; then
+        systemctl --user daemon-reload 2>/dev/null || true
+    fi
+}
+
+_action_update() {
+    selfupdate_install
+}
+
+# ========================================================
+# TUI Screens
+# ========================================================
+
+_screen_main_menu() {
+    # Ensure detection + defaults are always available
+    if [[ -z "${_DETECTED_PKG:-}" ]]; then
+        _detect_all
+        _init_config_defaults
+        _load_existing_config 2>/dev/null || true
+    fi
+
+    _tui_clear
+    _tui_draw_header "NUDGE" "a gentle nudge to keep your system fresh  ·  v${VERSION}"
+    _tui_bunny "hey! i'm nudge." "what would you like to do?"
+    _tui_menu_header "MAIN MENU"
+    _tui_menu_section "Setup"
+    _tui_menu_item 1 "Install nudge" "detect, configure & install"
+    _tui_menu_item 2 "Configure settings" "tweak all options"
+    _tui_menu_item 3 "Install options" "prefix, autostart method"
+    _tui_menu_item 4 "Check status" "verify install"
+    echo ""
+    _tui_menu_section "Maintenance"
+    _tui_menu_item 5 "Update nudge" "check for new version"
+    _tui_menu_item 6 "Uninstall" "remove nudge"
+    _tui_menu_footer "Exit"
+    _tui_prompt_choice 6
+    case "${_MENU_CHOICE}" in
+        0) _STATE="EXIT" ;;
+        1) _STATE="INSTALL_DETECT" ;;
+        2) _STATE="CONFIGURE" ;;
+        3) _STATE="INSTALL_OPTIONS" ;;
+        4) _STATE="STATUS" ;;
+        5) _STATE="UPDATE_CHECK" ;;
+        6) _STATE="UNINSTALL" ;;
+        *) _STATE="MAIN_MENU" ;;
+    esac
+}
+
+_screen_install_detect() {
+    _detect_all
+    _init_config_defaults
+
+    _tui_bunny "detecting your system..." ""
+    _tui_operation_header "System Detection"
+    echo ""
+    _tui_table \
+        "Desktop" "${_DETECTED_DE}" \
+        "Notification" "${_DETECTED_BACKEND}" \
+        "Terminal" "${_DETECTED_TERMINAL}" \
+        "Package manager" "${_DETECTED_PKG}"
+    [[ "$_HAVE_FLATPAK" == "true" ]] && _tui_info "Flatpak: detected"
+    [[ "$_HAVE_SNAP" == "true" ]] && _tui_info "Snap: detected"
+
+    if [[ "$_DETECTED_BACKEND" == "none" ]]; then
+        echo ""
+        _tui_error "No notification backend found."
+        _tui_info "Install one of: kdialog, zenity, dunst, or libnotify-bin"
+        _tui_wait
+        _STATE="MAIN_MENU"
+        return
+    fi
+    if [[ "$_DETECTED_BACKEND" == "gdbus" || "$_DETECTED_BACKEND" == "notify-send" ]]; then
+        echo ""
+        _tui_warn "Only a passive notification tool was found (${_DETECTED_BACKEND}): nudge can tell you about updates but cannot ask."
+        _tui_info "Install kdialog (KDE) or zenity (GNOME, XFCE) for the Update Now / Remind Me Later dialog."
+    fi
+
+    local existing_version=""
+    if [[ -f "${_PREFIX}/.config/nudge.version" ]]; then
+        existing_version=$(cat "${_PREFIX}/.config/nudge.version" 2>/dev/null || true)
+    fi
+    if [[ -n "$existing_version" ]]; then
+        echo ""
+        _tui_warn "nudge v${existing_version} is already installed."
+    fi
+
+    if [[ -z "$existing_version" ]] && [[ -f "${_PREFIX}/.config/nudge/nudge.conf" ]]; then
+        _IS_REINSTALL=true
+        _load_existing_config || true
+    fi
+
+    if [[ "$_IS_REINSTALL" == "true" ]] && [[ "${CFG_BUNNY_PERSONALITY:-disney}" != "classic" ]]; then
+        _tui_info "YOU CAME BACK!! i knew you would!! i missed you so much!!"
+    fi
+
+    echo ""
+    _tui_menu_header "WHAT NEXT?"
+    _tui_menu_item 1 "Install now" "smart defaults, go!"
+    _tui_menu_item 2 "Configure first" "tweak settings before install"
+    _tui_menu_item 3 "Install options" "prefix, autostart method"
+    _tui_menu_item 4 "Install & run" "install then dry-run test"
+    _tui_menu_footer "Back"
+    _tui_prompt_choice 4
+    case "${_MENU_CHOICE}" in
+        1)
+            if [[ -n "$existing_version" ]]; then
+                _UPGRADE=true
+                _load_existing_config || true
+            fi
+            _STATE="INSTALL_EXEC"
+            ;;
+        2)
+            if [[ -n "$existing_version" ]]; then
+                _UPGRADE=true
+                _load_existing_config || true
+            fi
+            _CONFIGURE_RETURN="INSTALL_EXEC"
+            _STATE="CONFIGURE"
+            ;;
+        3)
+            if [[ -n "$existing_version" ]]; then
+                _UPGRADE=true
+                _load_existing_config || true
+            fi
+            _STATE="INSTALL_OPTIONS"
+            ;;
+        4)
+            if [[ -n "$existing_version" ]]; then
+                _UPGRADE=true
+                _load_existing_config || true
+            fi
+            _STATE="INSTALL_EXEC_RUN"
+            ;;
+        *) _STATE="MAIN_MENU" ;;
+    esac
+}
+
+_screen_install_options() {
+    _tui_bunny "install options" "configure how nudge gets installed"
+    _tui_menu_header "INSTALL OPTIONS"
+
+    echo ""
+    _tui_header "Current Settings"
+    _tui_table \
+        "Install prefix" "${_PREFIX}" \
+        "Autostart method" "${_AUTOSTART_METHOD}"
+    echo ""
+
+    _tui_menu_item 1 "Set install prefix" "currently: ${_PREFIX}"
+    _tui_menu_item 2 "Autostart method" "currently: ${_AUTOSTART_METHOD}"
+    _tui_menu_footer "Back"
+    _tui_prompt_choice 2
+    case "${_MENU_CHOICE}" in
+        1)
+            local new_prefix
+            new_prefix=$(_tui_input "Install prefix" "$_PREFIX")
+            new_prefix="${new_prefix/#\~/$HOME}"
+            new_prefix="${new_prefix%/}"
+            if [[ "$new_prefix" != /* ]]; then
+                _tui_warn "The prefix must be an absolute path"
+            elif [[ -d "$new_prefix" ]]; then
+                _PREFIX="$new_prefix"
+                [[ "$_PREFIX" == "$HOME" ]] && _LIVE_PREFIX=true || _LIVE_PREFIX=false
+                _tui_info "Prefix set to: ${_PREFIX}"
+            else
+                _tui_warn "Directory does not exist: ${new_prefix}"
+                local create
+                create=$(_tui_confirm "Create it?" "true")
+                if [[ "$create" == "true" ]]; then
+                    mkdir -p "$new_prefix" 2>/dev/null && _PREFIX="$new_prefix" && _tui_info "Created and set: ${_PREFIX}" \
+                        || _tui_error "Failed to create directory"
+                fi
+            fi
+            _tui_wait
+            _STATE="INSTALL_OPTIONS"
+            ;;
+        2)
+            local method
+            method=$(_tui_choice "Autostart method:" "$_AUTOSTART_METHOD" "auto" "xdg" "systemd")
+            _AUTOSTART_METHOD="$method"
+            _tui_info "Autostart method set to: ${_AUTOSTART_METHOD}"
+            _tui_wait
+            _STATE="INSTALL_OPTIONS"
+            ;;
+        *)
+            _STATE="MAIN_MENU"
+            ;;
+    esac
+}
+
+_screen_install_exec() {
+    _tui_bunny "installing nudge v${VERSION}..." ""
+    _tui_operation_header "Installing nudge v${VERSION}"
+    echo ""
+
+    local steps=10 step=0 ok=true
+    local -a plan=(
+        "Directories:_action_create_dirs" "Backup:_action_backup_config" "Config:_action_write_config"
+        "Scripts:_action_install_scripts" "Autostart:_action_install_autostart" "Completion:_action_install_completion"
+        "Man page:_action_install_man" "Icon:_action_install_icon" "Version:_action_stamp_version"
+    )
+    local entry
+    for entry in "${plan[@]}"; do
+        step=$((step + 1)); _tui_progress "$step" "$steps" "${entry%%:*}"
+        "${entry#*:}" || { ok=false; break; }
+    done
+    if [[ "$ok" != "true" ]]; then
+        echo ""
+        _tui_error "The install did not finish; see the errors above."
+        _tui_wait
+        _STATE="MAIN_MENU"
+        return
+    fi
+
+    step=$((step + 1)); _tui_progress "$step" "$steps" "Verify"
+    _action_verify
+
+    _STATE="INSTALL_DONE"
+}
+
+_screen_install_done() {
+    local personality="${CFG_BUNNY_PERSONALITY:-disney}"
+    echo ""
+    if [[ "${_IS_REINSTALL:-false}" == "true" ]] && [[ "$personality" != "classic" ]]; then
+        _tui_info "i promise i'll take even better care of you this time!!"
+    else
+        _tui_info "all done! nudge is installed."
+        _tui_info "run nudge.sh --dry-run to test."
+    fi
+    echo ""
+    local autostart_now="${_AUTOSTART_METHOD}"
+    if [[ -f "${_PREFIX}/.config/systemd/user/nudge.timer" ]]; then autostart_now="systemd"
+    elif [[ -f "${_PREFIX}/.config/autostart/nudge.desktop" ]]; then autostart_now="xdg"; fi
+    _tui_header "Install Summary"
+    _tui_table \
+        "Version" "$VERSION" \
+        "Autostart" "$autostart_now" \
+        "Backend" "${_DETECTED_BACKEND}" \
+        "Package mgr" "${_DETECTED_PKG}"
+
+    if [[ "${_RUN_AFTER_INSTALL:-false}" == "true" ]]; then
+        _RUN_AFTER_INSTALL=false
+        echo ""
+        _tui_operation_header "Running nudge --dry-run"
+        echo ""
+        if [[ -x "${_PREFIX}/.local/bin/nudge.sh" ]]; then
+            local dry_rc=0
+            "${_PREFIX}/.local/bin/nudge.sh" --dry-run 2>&1 | while IFS= read -r line; do
+                echo "    $line"
+            done || dry_rc=$?
+            [[ "$dry_rc" -ne 0 ]] && _tui_warn "dry-run exited with status $dry_rc"
+        else
+            _tui_error "nudge.sh not found at ${_PREFIX}/.local/bin/nudge.sh"
+        fi
+    fi
+
+    _tui_wait
+    _STATE="MAIN_MENU"
+}
+
+_screen_uninstall() {
+    local personality="${CFG_BUNNY_PERSONALITY:-disney}"
+
+    local file_list=()
+    [[ -f "${_PREFIX}/.local/bin/nudge.sh" ]] && file_list+=("~/.local/bin/nudge.sh")
+    [[ -f "${_PREFIX}/.local/bin/nudge-setup.sh" ]] && file_list+=("~/.local/bin/nudge-setup.sh")
+    [[ -d "${_PREFIX}/.local/lib/nudge" ]] && file_list+=("~/.local/lib/nudge/")
+    [[ -f "${_PREFIX}/.config/autostart/nudge.desktop" ]] && file_list+=("~/.config/autostart/nudge.desktop")
+    [[ -d "${_PREFIX}/.local/share/nudge" ]] && file_list+=("~/.local/share/nudge/")
+    [[ -d "${_PREFIX}/.config/nudge" ]] && file_list+=("~/.config/nudge/")
+
+    if [[ "$personality" == "classic" ]]; then
+        _tui_bunny "Uninstall nudge" ""
+    else
+        _tui_bunny "you... you're removing me?" ""
+    fi
+
+    _tui_warning_box "Uninstall" "The following files will be removed:" "${file_list[@]}"
+
+    _tui_menu_item 1 "Uninstall now" "remove everything"
+    _tui_menu_item 2 "Uninstall (keep config)" "preserve settings"
+    _tui_menu_footer "Back"
+    _tui_prompt_choice 2
+    case "${_MENU_CHOICE}" in
+        1) _KEEP_CONFIG=false; _STATE="UNINSTALL_EXEC" ;;
+        2) _KEEP_CONFIG=true; _STATE="UNINSTALL_EXEC" ;;
+        *) _STATE="MAIN_MENU" ;;
+    esac
+}
+
+_screen_uninstall_exec() {
+    local personality="${CFG_BUNNY_PERSONALITY:-disney}"
+
+    if [[ "$personality" != "classic" ]]; then
+        _tui_bunny "but... who will check for the updates?" ""
+        sleep 1
+        _tui_bunny "i tried my best... i really did" ""
+        sleep 1
+    fi
+
+    _tui_operation_header "Removing nudge"
+    echo ""
+    _action_uninstall
+
+    if [[ "$personality" != "classic" ]]; then
+        echo ""
+        _bunny_farewell "$BUNNY_FACE_CRYING" "okay... bye bye fren. stay safe out there."
+        echo ""
+        echo "    *waves tiny paw*"
+    fi
+
+    echo ""
+    _tui_info "nudge has been removed."
+    _tui_info "Your system will no longer check for updates at login."
+
+    if [[ "$_KEEP_CONFIG" == "true" ]] && [[ -d "${_PREFIX}/.config/nudge" ]]; then
+        if [[ "$personality" != "classic" ]]; then
+            _tui_info "you kept my config... does that mean you might come back? ( :.-)"
+        else
+            _tui_info "Config preserved at: ~/.config/nudge/"
+        fi
+    fi
+
+    # Offer to delete source directory
+    if _is_nudge_source_dir "$SCRIPT_DIR"; then
+        echo ""
+        _tui_info "Source directory still exists: ${SCRIPT_DIR}/"
+        _tui_menu_item 1 "Delete it too" "rm -rf ${SCRIPT_DIR}/"
+        _tui_menu_footer "Keep it"
+        _tui_prompt_choice 1
+        case "${_MENU_CHOICE}" in
+            1)
+                local confirmed
+                confirmed=$(_tui_confirm "This will permanently delete ${SCRIPT_DIR}. Are you sure?" "false")
+                if [[ "$confirmed" == "true" ]]; then
+                    rm -rf "$SCRIPT_DIR"
+                    _tui_info "Deleted: ${SCRIPT_DIR}/"
+                    exit 0
+                else
+                    _tui_info "Source directory kept."
+                fi
+                ;;
+            *)
+                _tui_info "Source directory kept."
+                ;;
+        esac
+    fi
+
+    _tui_wait
+    _STATE="MAIN_MENU"
+}
+
+_screen_configure() {
+    local return_state="${_CONFIGURE_RETURN}"
+    _CONFIGURE_RETURN="MAIN_MENU"
+
+    # Ensure defaults are initialized even if entering configure directly
+    if [[ -z "${_DETECTED_PKG:-}" ]]; then
+        _detect_all
+        _init_config_defaults
+    fi
+    _load_existing_config 2>/dev/null || true
+
+    local _cat_descriptions=(
+        "enable/disable, delay, security checks"
+        "backend, preview, bunny personality"
+        "host, timeout, retries, offline mode"
+        "login/timer, interval, deferral"
+        "package manager overrides"
+        "reboot check, snapshots"
+        "auto-update, channel"
+        "history, log file, verbosity"
+        "terminal emulator for upgrades"
+    )
+
+    while true; do
+        _tui_bunny "configure nudge" "pick a category"
+        _tui_menu_header "CONFIGURATION"
+        local i
+        for i in "${!_CATEGORY_NAMES[@]}"; do
+            _tui_menu_item "$(( i + 1 ))" "${_CATEGORY_LABELS[$i]}" "${_cat_descriptions[$i]}"
+        done
+        _tui_menu_footer "Save & back"
+        _tui_prompt_choice "${#_CATEGORY_NAMES[@]}"
+
+        if [[ "$_MENU_CHOICE" == "0" ]]; then
+            _STATE="$return_state"
+            return
+        elif [[ "$_MENU_CHOICE" -lt 1 ]] || [[ "$_MENU_CHOICE" -gt ${#_CATEGORY_NAMES[@]} ]]; then
+            continue
+        else
+            local idx=$((_MENU_CHOICE - 1))
+            local category="${_CATEGORY_NAMES[$idx]}"
+            local keys_str="${CONFIG_CATEGORIES[$category]:-}"
+            # shellcheck disable=SC2206
+            local keys=($keys_str)
+
+            local editing=true
+            while [[ "$editing" == "true" ]]; do
+                _tui_bunny "${_CATEGORY_LABELS[$idx]}" "pick a setting to change"
+                _tui_menu_header "${_CATEGORY_LABELS[$idx]^^}"
+                local i=1
+                for key in "${keys[@]}"; do
+                    local var="CFG_${key}"
+                    local val="${!var:-${CONFIG_DEFAULTS[$key]:-}}"
+                    local type="${CONFIG_TYPES[$key]:-string}"
+                    local type_label
+                    case "$type" in
+                        bool) type_label="bool" ;;
+                        int)  type_label="int" ;;
+                        enum:*) type_label="${type#enum:}" ;;
+                        *)    type_label="text" ;;
+                    esac
+                    local desc="${key} = ${val}  (${type_label})"
+                    _tui_menu_item "$i" "$key" "${val}  (${type_label})"
+                    i=$((i + 1))
+                done
+                _tui_menu_footer "Back"
+                _tui_prompt_choice "${#keys[@]}"
+
+                if [[ "$_MENU_CHOICE" == "0" ]]; then
+                    editing=false
+                elif [[ "$_MENU_CHOICE" -ge 1 ]] && [[ "$_MENU_CHOICE" -le ${#keys[@]} ]]; then
+                    local edit_idx=$((_MENU_CHOICE - 1))
+                    _edit_config_key "${keys[$edit_idx]}"
+                fi
+            done
+
+            # Save if config file exists
+            if [[ -f "${_PREFIX}/.config/nudge/nudge.conf" ]] || [[ -f "${_PREFIX}/.config/nudge.conf" ]]; then
+                _action_write_config 2>/dev/null || true
+            fi
+        fi
+    done
+}
+
+_screen_update() {
+    _tui_bunny "checking for updates..." ""
+    _tui_operation_header "Update Check"
+    echo ""
+
+    local latest=""
+    local _orig_check="${SELF_UPDATE_CHECK:-true}"
+    SELF_UPDATE_CHECK="true"
+    NUDGE_VERSION="$VERSION"
+
+    local state_file="${NUDGE_STATE_DIR:-$HOME/.local/share/nudge}/selfupdate_last_check"
+    rm -f "$state_file" 2>/dev/null || true
+
+    latest=$(selfupdate_check 2>/dev/null) || true
+    SELF_UPDATE_CHECK="$_orig_check"
+
+    if [[ -z "$latest" ]] && [[ "${_SELFUPDATE_STATUS:-}" == "unreachable" || "${_SELFUPDATE_STATUS:-}" == "unparseable" ]]; then
+        _tui_bunny "couldn't reach GitHub to check." "running nudge v${VERSION}; try again later"
+        _tui_wait
+        _STATE="MAIN_MENU"
+        return
+    fi
+    if [[ -z "$latest" ]]; then
+        _tui_bunny "you're up to date!" "running nudge v${VERSION}"
+        _tui_table \
+            "Auto-update" "$([ "${CFG_SELF_UPDATE_CHECK:-true}" == "true" ] && echo "on" || echo "off")" \
+            "Channel" "${CFG_SELF_UPDATE_CHANNEL:-stable}" \
+            "Source" "github.com/${SELFUPDATE_REPO}"
+        echo ""
+        _tui_menu_item 1 "Toggle auto-update" "turn on/off"
+        _tui_menu_item 2 "Switch channel" "stable/beta"
+        _tui_menu_footer "Back"
+        _tui_prompt_choice 2
+        case "${_MENU_CHOICE}" in
+            1)
+                if [[ "${CFG_SELF_UPDATE_CHECK:-true}" == "true" ]]; then
+                    CFG_SELF_UPDATE_CHECK=false
+                    _tui_info "Auto-update: OFF"
+                else
+                    CFG_SELF_UPDATE_CHECK=true
+                    _tui_info "Auto-update: ON"
+                fi
+                _action_write_config 2>/dev/null || true
+                _tui_wait
+                ;;
+            2)
+                if [[ "${CFG_SELF_UPDATE_CHANNEL:-stable}" == "stable" ]]; then
+                    CFG_SELF_UPDATE_CHANNEL="beta"
+                    _tui_info "Channel: beta"
+                else
+                    CFG_SELF_UPDATE_CHANNEL="stable"
+                    _tui_info "Channel: stable"
+                fi
+                _action_write_config 2>/dev/null || true
+                _tui_wait
+                ;;
+        esac
+    else
+        _tui_bunny "nudge v${latest} is available!" "you're on v${VERSION}"
+        _tui_menu_item 1 "Update now" "install v${latest}"
+        _tui_menu_item 2 "Skip" "stay on v${VERSION}"
+        _tui_menu_footer "Back"
+        _tui_prompt_choice 2
+        case "${_MENU_CHOICE}" in
+            1)
+                _tui_bunny "updating to v${latest}..." ""
+                _tui_operation_header "Updating to v${latest}"
+                echo ""
+                if _action_update; then
+                    _tui_info "Updated to v${latest}!"
+                    _tui_info "Restart setup.sh to use the new version."
+                else
+                    _tui_error "Update failed."
+                fi
+                _tui_wait
+                ;;
+        esac
+    fi
+    _STATE="MAIN_MENU"
+}
+
+_screen_status() {
+    _tui_bunny "system status" ""
+    _tui_operation_header "System Status"
+    echo ""
+
+    local installed_ver=""
+    if [[ -f "${_PREFIX}/.config/nudge.version" ]]; then
+        installed_ver=$(cat "${_PREFIX}/.config/nudge.version" 2>/dev/null || true)
+    fi
+
+    if [[ -n "$installed_ver" ]]; then
+        _tui_info "Installed: nudge v${installed_ver}"
+    else
+        _tui_warn "nudge is not installed"
+    fi
+
+    _tui_info "Setup version: $VERSION"
+    echo ""
+
+    _tui_header "Components"
+    local autostart_status="not configured"
+    if [[ -f "${_PREFIX}/.config/autostart/nudge.desktop" ]]; then
+        autostart_status="XDG desktop entry"
+    elif systemctl --user is-enabled nudge.timer &>/dev/null 2>&1; then
+        autostart_status="systemd timer (enabled)"
+    fi
+
+    local nudge_sh_status="missing" lib_status="missing" config_status="missing"
+    local comp_status="missing" man_status="missing"
+    [[ -f "${_PREFIX}/.local/bin/nudge.sh" ]] && nudge_sh_status="present"
+    [[ -d "${_PREFIX}/.local/lib/nudge" ]] && lib_status="present"
+    [[ -f "${_PREFIX}/.config/nudge/nudge.conf" ]] && config_status="present"
+    [[ -f "${_PREFIX}/.local/share/bash-completion/completions/nudge" ]] && comp_status="present"
+    [[ -f "${_PREFIX}/.local/share/man/man1/nudge.1" ]] && man_status="present"
+
+    _tui_table \
+        "Autostart" "$autostart_status" \
+        "nudge.sh" "$nudge_sh_status" \
+        "lib modules" "$lib_status" \
+        "Config" "$config_status" \
+        "Bash completion" "$comp_status" \
+        "Man page" "$man_status"
+
+    if _load_existing_config 2>/dev/null; then
+        echo ""
+        _tui_header "Config Highlights"
+        _tui_table \
+            "ENABLED" "${CFG_ENABLED}" \
+            "SCHEDULE_MODE" "${CFG_SCHEDULE_MODE}" \
+            "DELAY" "${CFG_DELAY}s" \
+            "AUTO_UPDATE" "${CFG_SELF_UPDATE_CHECK}" \
+            "CHANNEL" "${CFG_SELF_UPDATE_CHANNEL}"
+    fi
+
+    _tui_wait
+    _STATE="MAIN_MENU"
+}
+
+# ========================================================
+# CLI dispatch — handle non-interactive flags
+# ========================================================
+
+_cli_dispatch() {
+    _detect_all
+    _init_config_defaults
+
+    case "$_MODE" in
+        install)
+            if [[ "$_UPGRADE" == "true" ]]; then
+                _load_existing_config || true
+            fi
+            if [[ "$_USE_DEFAULTS" != "true" ]] && [[ "$_UNATTENDED" != "true" ]]; then
+                return 1
+            fi
+            local _cli_reinstall=false
+            local existing_ver=""
+            [[ -f "${_PREFIX}/.config/nudge.version" ]] && existing_ver=$(cat "${_PREFIX}/.config/nudge.version" 2>/dev/null || true)
+            if [[ -z "$existing_ver" ]] && [[ -f "${_PREFIX}/.config/nudge/nudge.conf" ]]; then
+                _cli_reinstall=true
+                _load_existing_config || true
+            fi
+            echo ""
+            if [[ "$_cli_reinstall" == "true" ]] && [[ "${CFG_BUNNY_PERSONALITY:-disney}" != "classic" ]]; then
+                output_banner "YOU CAME BACK!! i knew you would!! i missed you so much!!" "" "$BUNNY_FACE_HAPPY"
+            else
+                output_banner "installing nudge v${VERSION}..." ""
+            fi
+            echo ""
+            # Every step must succeed
+            if ! _install_steps; then
+                echo ""
+                output_banner "the install did not finish." "see the errors above; nothing was verified." "$BUNNY_FACE_WORRIED"
+                exit "$_EXIT_ACTION_FAIL"
+            fi
+            if [[ "$_UNATTENDED" != "true" ]]; then
+                _action_verify
+            fi
+            echo ""
+            if [[ "$_DRY_RUN" == "true" ]]; then
+                output_banner "dry run finished." "nothing was changed."
+            else
+                output_banner "all done! nudge is installed." "run nudge --dry-run to test."
+            fi
+            echo ""
+            exit "$_EXIT_OK"
+            ;;
+        uninstall)
+            _load_existing_config 2>/dev/null || true
+            local personality="${CFG_BUNNY_PERSONALITY:-disney}"
+
+            if [[ "$_UNATTENDED" != "true" ]] && [[ "$_DRY_RUN" != "true" ]] && [[ -t 0 ]]; then
+                local sure
+                sure=$(_tui_confirm "Remove nudge from ${_PREFIX}?" "false")
+                if [[ "$sure" != "true" ]]; then
+                    echo "  Nothing removed."
+                    exit "$_EXIT_CANCELLED"
+                fi
+            fi
+
+            echo ""
+            if [[ "$personality" == "classic" ]]; then
+                output_banner "Removing nudge..." ""
+            else
+                output_banner "you... you're removing me?" "" "$BUNNY_FACE_NORMAL"
+                echo ""
+                output_banner "i tried my best... i really did" "" "$BUNNY_FACE_TEARY"
+            fi
+            echo ""
+
+            _action_uninstall
+
+            echo ""
+            if [[ "$personality" == "classic" ]]; then
+                output_banner "nudge has been removed." ""
+            else
+                _bunny_farewell "$BUNNY_FACE_CRYING" "*waves tiny paw*"
+                echo ""
+                echo "  nudge has been removed. Your system will no longer check for updates at login."
+            fi
+
+            if [[ "$_KEEP_CONFIG" == "true" ]] && [[ -d "${_PREFIX}/.config/nudge" ]]; then
+                if [[ "$personality" != "classic" ]]; then
+                    echo ""
+                    output_banner "you kept my config... does that mean you might come back?" "" "$BUNNY_FACE_TEARY"
+                else
+                    echo ""
+                    echo "  Config preserved at: ~/.config/nudge/"
+                fi
+            fi
+            echo ""
+
+            if _is_nudge_source_dir "$SCRIPT_DIR" && [[ -t 0 ]]; then
+                echo "  The source directory still exists:"
+                echo "    ${SCRIPT_DIR}/"
+                echo ""
+                local confirmed
+                confirmed=$(_tui_confirm "Delete source directory ${SCRIPT_DIR}/?" "false")
+                if [[ "$confirmed" == "true" ]]; then
+                    confirmed=$(_tui_confirm "This will permanently delete ${SCRIPT_DIR}. Are you sure?" "false")
+                    if [[ "$confirmed" == "true" ]]; then
+                        rm -rf "$SCRIPT_DIR"
+                        echo "  Deleted: ${SCRIPT_DIR}/"
+                        exit "$_EXIT_OK"
+                    fi
+                fi
+                echo "  Source directory kept."
+            elif _is_nudge_source_dir "$SCRIPT_DIR"; then
+                echo "  Note: source directory remains at ${SCRIPT_DIR}/"
+            fi
+            exit "$_EXIT_OK"
+            ;;
+        update)
+            NUDGE_VERSION="$VERSION"
+            if [[ "$_UPDATE_CHECK_ONLY" == "true" ]]; then
+                SELF_UPDATE_CHECK="true"
+                local state_file="${NUDGE_STATE_DIR:-$HOME/.local/share/nudge}/selfupdate_last_check"
+                rm -f "$state_file" 2>/dev/null || true
+                local latest
+                latest=$(selfupdate_check 2>/dev/null) || true
+                if [[ -n "$latest" ]]; then
+                    echo "nudge v${latest} available (current: v${VERSION})"
+                else
+                    echo "nudge v${VERSION} is up to date"
+                fi
+                exit "$_EXIT_OK"
+            fi
+            _action_update
+            exit "$_EXIT_OK"
+            ;;
+        config-only)
+            _load_existing_config || true
+            return 1
+            ;;
+    esac
+
+    return 1
+}
+
+# ========================================================
+# Main entry point
+# ========================================================
+
+main() {
+    # Clean up bootstrap tmpdir from piped execution
+    if [[ -n "$_BOOTSTRAP_TMPDIR" ]] && [[ -d "$_BOOTSTRAP_TMPDIR" ]]; then
+        trap 'rm -rf "$_BOOTSTRAP_TMPDIR"' EXIT
+    fi
+
+    if [[ -n "$_MODE" ]]; then
+        if _cli_dispatch; then
+            exit "$_EXIT_OK"
+        fi
+    fi
+
+    _STATE="MAIN_MENU"
+
+    if [[ "$_MODE" == "config-only" ]]; then
+        _detect_all
+        _init_config_defaults
+        _STATE="CONFIGURE"
+    elif [[ "$_MODE" == "install" ]]; then
+        _STATE="INSTALL_DETECT"
+    fi
+
+    while [[ "$_STATE" != "EXIT" ]]; do
+        case "$_STATE" in
+            MAIN_MENU)       _screen_main_menu ;;
+            INSTALL_DETECT)  _screen_install_detect ;;
+            INSTALL_OPTIONS) _screen_install_options ;;
+            INSTALL_EXEC)    _screen_install_exec ;;
+            INSTALL_EXEC_RUN) _RUN_AFTER_INSTALL=true; _screen_install_exec ;;
+            INSTALL_DONE)    _screen_install_done ;;
+            UNINSTALL)       _screen_uninstall ;;
+            UNINSTALL_EXEC)  _screen_uninstall_exec ;;
+            CONFIGURE)       _screen_configure ;;
+            UPDATE_CHECK)    _screen_update ;;
+            STATUS)          _screen_status ;;
+            *)               _STATE="EXIT" ;;
+        esac
+    done
+
+    echo ""
+    output_banner "bye! stay fresh." ""
+    echo ""
+    exit "$_EXIT_OK"
+}
+
+main

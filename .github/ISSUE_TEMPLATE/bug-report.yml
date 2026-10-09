@@ -1,0 +1,130 @@
+name: Bug Report
+description: Report a bug with nudge
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please fill in the details below so we can reproduce and fix it.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: What happened? What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce the issue?
+      placeholder: |
+        1. Installed nudge with ./install.sh
+        2. Logged out and back in
+        3. ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: version
+    attributes:
+      label: nudge Version
+      description: Which version of nudge are you running?
+      options:
+        - v2.0.0
+        - v1.1.0
+        - Other (specify in description)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: distro
+    attributes:
+      label: Distribution
+      options:
+        - Ubuntu 24.04 LTS
+        - Ubuntu 24.10
+        - Ubuntu 25.04
+        - Kubuntu
+        - Debian 12
+        - Debian 13
+        - Linux Mint
+        - Fedora 40
+        - Fedora 41
+        - Arch Linux
+        - openSUSE Tumbleweed
+        - openSUSE Leap
+        - Other (specify in description)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: desktop
+    attributes:
+      label: Desktop Environment
+      options:
+        - KDE Plasma 6
+        - KDE Plasma 5
+        - GNOME
+        - XFCE
+        - Other (specify in description)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Notification Backend
+      description: Which notification tool is nudge using?
+      options:
+        - kdialog
+        - zenity
+        - dunstify
+        - gdbus
+        - notify-send
+        - Unknown / auto
+    validations:
+      required: true
+
+  - type: dropdown
+    id: pkgmgr
+    attributes:
+      label: Package Manager
+      description: Which package manager is nudge using?
+      options:
+        - apt
+        - dnf
+        - pacman
+        - zypper
+        - auto
+    validations:
+      required: true
+
+  - type: dropdown
+    id: autostart
+    attributes:
+      label: Autostart Method
+      description: How is nudge launched automatically?
+      options:
+        - XDG autostart
+        - systemd timer
+        - manual
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: Paste your nudge.conf (remove any sensitive custom commands)
+      render: bash
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log Output
+      description: If logging is enabled, paste relevant log lines. Or run `nudge.sh --dry-run` and paste the output.
+      render: text

@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 290" width="240" height="290" role="img" aria-label="the Nudge Bunny, happy">
+  <title>the Nudge Bunny (happy)</title>
+  <g id="body">
+    <circle cx="66" cy="246" r="10" fill="#F6F3EC" stroke="#C9C1B3" stroke-width="3"/>
+    <ellipse cx="120" cy="240" rx="50" ry="36" fill="#F6F3EC" stroke="#C9C1B3" stroke-width="3"/>
+    <ellipse cx="98" cy="270" rx="17" ry="8" fill="#F6F3EC" stroke="#C9C1B3" stroke-width="3"/>
+    <ellipse cx="142" cy="270" rx="17" ry="8" fill="#F6F3EC" stroke="#C9C1B3" stroke-width="3"/>
+    <path d="M90 268 v5 M98 269 v5 M106 268 v5 M134 268 v5 M142 269 v5 M150 268 v5" stroke="#C9C1B3" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="92" cy="238" r="11" fill="#F6F3EC" stroke="#C9C1B3" stroke-width="3"/>
+    <!-- the raised arm: an outlined tube from the shoulder to a paw beside the ear -->
+    <path d="M158 226 q22 -26 24 -58" stroke="#C9C1B3" stroke-width="15" fill="none" stroke-linecap="round"/>
+    <path d="M158 226 q22 -26 24 -58" stroke="#F6F3EC" stroke-width="9" fill="none" stroke-linecap="round"/>
+    <circle cx="183" cy="166" r="12" fill="#F6F3EC" stroke="#C9C1B3" stroke-width="3"/>
+    <path d="M176 160 l-4 -7 M183 157 l0 -8 M190 160 l4 -7" stroke="#C9C1B3" stroke-width="2.2" stroke-linecap="round"/>
+  </g>
+  <g id="ears" stroke="#C9C1B3" stroke-width="3">
+    <g transform="translate(96 118) rotate(-14)">
+      <rect x="-19" y="-118" width="38" height="124" rx="19" fill="#F6F3EC"/>
+      <rect x="-10" y="-102" width="20" height="92" rx="10" fill="#F9C3CE" stroke="none"/>
+    </g>
+    <g transform="translate(144 118) rotate(14)">
+      <rect x="-19" y="-118" width="38" height="124" rx="19" fill="#F6F3EC"/>
+      <rect x="-10" y="-102" width="20" height="92" rx="10" fill="#F9C3CE" stroke="none"/>
+    </g>
+  </g>
+  <g id="head">
+    <circle cx="120" cy="152" r="64" fill="#F6F3EC" stroke="#C9C1B3" stroke-width="3"/>
+    <ellipse cx="82" cy="170" rx="12" ry="7.5" fill="#F8C9D2"/>
+    <ellipse cx="158" cy="170" rx="12" ry="7.5" fill="#F8C9D2"/>
+    <g stroke="#C9C1B3" stroke-width="2.2" stroke-linecap="round" fill="none">
+      <path d="M68 158 H46 M68 165 L46 170 M68 151 L46 146"/>
+      <path d="M172 158 H194 M172 165 L194 170 M172 151 L194 146"/>
+    </g>
+    <path d="M113 161 H127 L120 169 Z" fill="#E78CA0"/>
+  </g>
+  <g id="face-happy">
+    <path d="M88 146 q10 -12 20 0 M132 146 q10 -12 20 0" stroke="#2B2B2B" stroke-width="4.2" fill="none" stroke-linecap="round"/>
+    <path d="M108 170 q12 12 24 0" stroke="#B96F80" stroke-width="2.8" fill="none" stroke-linecap="round"/>
+  </g>
+</svg>
