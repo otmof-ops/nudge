@@ -1,6 +1,8 @@
 #!/usr/bin/env bats
 # SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/nudge)
 # SPDX-License-Identifier: BSD-3-Clause
+
+bats_require_minimum_version 1.5.0
 # Tests for lib/notify.sh — notification backends, dispatch, response mapping
 
 setup() {
@@ -50,6 +52,7 @@ EOF
 }
 
 @test "notify_detect finds dunstify first" {
+    export DISPLAY=":0"
     NOTIFICATION_BACKEND="auto"
     cat > "$MOCK_BIN/dunstify" <<'EOF'
 #!/bin/bash
@@ -63,6 +66,7 @@ EOF
 }
 
 @test "notify_detect finds kdialog when dunstify absent" {
+    export DISPLAY=":0"
     NOTIFICATION_BACKEND="auto"
     cat > "$MOCK_BIN/kdialog" <<'EOF'
 #!/bin/bash
