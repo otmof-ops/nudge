@@ -498,6 +498,60 @@ EOF
     sess=$(mktemp "$TMPDIR_TEST/sess.XXXXXX")
     printf 'pkgmgr=apt\narch=amd64\n[system]\nvim|1|2\033[2J\033[1;1HFAKE|STANDARD|amd64|0\n' > "$sess"
     _runner_load_session "$sess"
-    [[ "${_SEL_LABEL[0]}" != *$'\033'* ]]
-    [[ "${_SEL_LABEL[0]}" == *"FAKE"* ]]
+    [[ "${_SEL_LABEL[0]}" == "vim" ]]
+    [[ "${_SEL_INFO[0]}" != *$'\033'* ]]
+    [[ "${_SEL_INFO[0]}" == *"FAKE"* ]]
+}
+
+@test "pkgmgr_write_session records the scope the dialog chose" {
+    DETECTED_PKGMGR="apt"
+    PKG_UPDATE_LIST="vim|1|2|STANDARD|amd64|0"
+    PKG_FLATPAK_LIST="" PKG_SNAP_LIST=""
+    export NUDGE_STATE_DIR="$TMPDIR_TEST/state"
+    local sess
+    sess=$(pkgmgr_write_session important)
+    grep -qx 'scope=important' "$sess"
+    sess=$(pkgmgr_write_session)
+    grep -qx 'scope=all' "$sess"
+}
+
+@test "the runner reads the scope; a session without one means the menu" {
+    source "$PROJECT_DIR/lib/select.sh"
+    local sess
+    sess=$(mktemp "$TMPDIR_TEST/sess.XXXXXX")
+    printf 'pkgmgr=apt\narch=amd64\n[system]\nvim|1|2|STANDARD|amd64|0\n' > "$sess"
+    _runner_load_session "$sess"
+    [[ "$_RUNNER_SCOPE" == "pick" ]]
+    printf 'pkgmgr=apt\narch=amd64\nscope=important\n[system]\nvim|1|2|STANDARD|amd64|0\n' > "$sess"
+    _runner_load_session "$sess"
+    [[ "$_RUNNER_SCOPE" == "important" ]]
+    printf 'pkgmgr=apt\narch=amd64\nscope=everything-please\n[system]\nvim|1|2|STANDARD|amd64|0\n' > "$sess"
+    _runner_load_session "$sess"
+    [[ "$_RUNNER_SCOPE" == "pick" ]]
+}
+
+@test "under the important scope only the critical and security names are upgraded" {
+    source "$PROJECT_DIR/lib/tui.sh"
+    _TUI_NO_COLOR=true _tui_init
+    source "$PROJECT_DIR/lib/select.sh"
+    _RUNNER_PKGMGR="apt"
+    DETECTED_PKGMGR="apt"
+    _RUNNER_STATUS="$TMPDIR_TEST/status"
+    : > "$_RUNNER_STATUS"
+    _runner_run_step() { printf '%s\n' "$*" >> "$TMPDIR_TEST/steps"; return 0; }
+    _runner_exec_command() { printf 'FULL %s\n' "$*" >> "$TMPDIR_TEST/steps"; return 0; }
+    select_reset
+    select_add system critical "linux-image" linux-image
+    select_add system security "openssl" openssl
+    select_add system standard "vim" vim
+    select_apply_scope important
+    _runner_apply_system
+    grep -q -- '--only-upgrade -- linux-image openssl' "$TMPDIR_TEST/steps"
+    run ! grep -q 'FULL' "$TMPDIR_TEST/steps"
+    grep -qx 'system=ok' "$_RUNNER_STATUS"
+    # every system package selected runs the full upgrade command instead
+    : > "$TMPDIR_TEST/steps"
+    select_apply_scope all
+    _runner_apply_system
+    grep -q '^FULL' "$TMPDIR_TEST/steps"
 }

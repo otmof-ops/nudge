@@ -326,7 +326,7 @@ EOF
     [[ "$NOTIFY_RESPONSE" == "passive" ]]
 }
 
-@test "the kdialog preview honours AUTO_DISMISS" {
+@test "the kdialog question honours AUTO_DISMISS and no text box comes before it" {
     cat > "$MOCK_BIN/timeout" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$@" >> "$TIMEOUT_ARGS"
@@ -343,9 +343,94 @@ EOF
     AUTO_DISMISS=30
     PREVIEW_UPDATES="true"
     notify_prompt "test" "pkg 1 -> 2"
-    # both the preview and the question went through timeout
-    [[ "$(grep -c '^30$' "$TIMEOUT_ARGS")" -eq 2 ]]
-    grep -q -- '--textbox' "$TIMEOUT_ARGS"
+    [[ "$(grep -c '^30$' "$TIMEOUT_ARGS")" -eq 1 ]]
+    grep -q -- '--yesnocancel' "$TIMEOUT_ARGS"
+    run ! grep -q -- '--textbox' "$TIMEOUT_ARGS"
+}
+
+@test "the kdialog question carries the rich body once the package lists are loaded" {
+    source "$PROJECT_DIR/lib/dialog.sh"
+    mkdir -p "$TMPDIR_TEST/mascot"
+    echo '<svg/>' > "$TMPDIR_TEST/mascot/bunny.svg"
+    NUDGE_MASCOT_DIR="$TMPDIR_TEST/mascot"
+    _DIALOG_READY=true
+    PKG_UPDATES_TOTAL=2 PKG_UPDATES_FLATPAK=0 PKG_UPDATES_SNAP=0 DETECTED_PKGMGR=apt
+    PKG_UPDATE_LIST=$'openssl|1|2|SECURITY|amd64|1\nvim|1|2|STANDARD|amd64|0'
+    DIALOG_QUOTE="hi there <friend>" DIALOG_MOOD=normal DIALOG_HINT="You choose what to install next." DIALOG_NOTE=""
+    cat > "$MOCK_BIN/kdialog" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$@" > "$KDIALOG_ARGS"
+exit 0
+EOF
+    chmod +x "$MOCK_BIN/kdialog"
+    PATH="$MOCK_BIN:$PATH"
+    export KDIALOG_ARGS="$TMPDIR_TEST/kdialog_args"
+    NOTIFY_BACKEND="kdialog"
+    AUTO_DISMISS=0
+    notify_prompt "plain fallback"
+    grep -q '<html>' "$KDIALOG_ARGS"
+    grep -q "$TMPDIR_TEST/mascot/bunny.svg" "$KDIALOG_ARGS"
+    grep -q '2 updates are ready' "$KDIALOG_ARGS"
+    grep -q '1 security' "$KDIALOG_ARGS"
+    grep -q 'hi there &lt;friend&gt;' "$KDIALOG_ARGS"
+    run ! grep -q 'plain fallback' "$KDIALOG_ARGS"
+    run ! grep -q '<friend>' "$KDIALOG_ARGS"
+}
+
+@test "without the lists the kdialog body is the plain message, escaped" {
+    source "$PROJECT_DIR/lib/dialog.sh"
+    _DIALOG_READY=false
+    cat > "$MOCK_BIN/kdialog" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$@" > "$KDIALOG_ARGS"
+exit 0
+EOF
+    chmod +x "$MOCK_BIN/kdialog"
+    PATH="$MOCK_BIN:$PATH"
+    export KDIALOG_ARGS="$TMPDIR_TEST/kdialog_args"
+    NOTIFY_BACKEND="kdialog"
+    AUTO_DISMISS=0
+    notify_prompt 'a <b>plain</b> line\nsecond line'
+    grep -q 'a &lt;b&gt;plain&lt;/b&gt; line<br>second line' "$KDIALOG_ARGS"
+}
+
+@test "zenity gets Pango markup with the text escaped" {
+    source "$PROJECT_DIR/lib/dialog.sh"
+    _DIALOG_READY=true
+    PKG_UPDATES_TOTAL=1 PKG_UPDATES_FLATPAK=0 PKG_UPDATES_SNAP=0 DETECTED_PKGMGR=apt
+    PKG_UPDATE_LIST='linux-image|1|2|CRITICAL|amd64|0'
+    DIALOG_QUOTE="a & b" DIALOG_MOOD=normal DIALOG_HINT="" DIALOG_NOTE=""
+    cat > "$MOCK_BIN/zenity" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$@" > "$ZENITY_ARGS"
+exit 0
+EOF
+    chmod +x "$MOCK_BIN/zenity"
+    PATH="$MOCK_BIN:$PATH"
+    export ZENITY_ARGS="$TMPDIR_TEST/zenity_args"
+    NOTIFY_BACKEND="zenity"
+    AUTO_DISMISS=0
+    notify_prompt "plain"
+    grep -q '1 update is ready' "$ZENITY_ARGS"
+    grep -q 'weight="bold"> ★ 1 critical </span>' "$ZENITY_ARGS"
+    grep -q 'a &amp; b' "$ZENITY_ARGS"
+}
+
+@test "notify_reboot uses the rich dialog when lib/dialog.sh is loaded" {
+    source "$PROJECT_DIR/lib/dialog.sh"
+    cat > "$MOCK_BIN/kdialog" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$@" > "$KDIALOG_ARGS"
+exit 1
+EOF
+    chmod +x "$MOCK_BIN/kdialog"
+    PATH="$MOCK_BIN:$PATH"
+    export KDIALOG_ARGS="$TMPDIR_TEST/kdialog_args"
+    NOTIFY_BACKEND="kdialog"
+    run notify_reboot
+    [[ "$status" -ne 0 ]]
+    grep -qx 'Restart Now' "$KDIALOG_ARGS"
+    grep -q 'A restart finishes the update' "$KDIALOG_ARGS"
 }
 
 @test "notify_reboot kdialog accepting returns 0" {
@@ -450,6 +535,8 @@ EOF
 }
 
 @test "the dialogs use the Nudge Bunny icon once it is installed" {
+    export XDG_DATA_HOME="$TMPDIR_TEST/data"
+    NUDGE_PREFIX=""
     [[ "$(_notify_icon name)" == "system-software-update" ]]
     local prefix="$TMPDIR_TEST/prefix"
     mkdir -p "$prefix/.local/share/icons/hicolor/scalable/apps"

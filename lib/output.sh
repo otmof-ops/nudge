@@ -212,6 +212,7 @@ json_emit() {
     "flatpak": ${_JSON_DATA[selected_flatpak]:-0},
     "snap": ${_JSON_DATA[selected_snap]:-0}
   },
+  "scope": ${_JSON_DATA[scope]:-null},
   "reboot_required": ${_JSON_DATA[reboot_required]:-false},
   "snapshot_id": ${_JSON_DATA[snapshot_id]:-null},
   "deferred": ${_JSON_DATA[deferred]:-false},

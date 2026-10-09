@@ -15,6 +15,7 @@ _SEL_SUB=()       # critical | security | standard | app | runtime | snap
 _SEL_LABEL=()     # what the user sees
 _SEL_TARGET=()    # what the package manager gets
 _SEL_ON=()        # 1 selected, 0 not
+_SEL_INFO=()      # what sits beside the label: the versions
 _SEL_ATOMIC=" "   # lists that only update as a whole, e.g. " system " on pacman
 _SEL_LIST_ORDER=(system flatpak snap)
 declare -gA _SEL_LIST_TITLE=(
@@ -43,13 +44,13 @@ _SEL_VIEW_IDX=()            # rows of the subcategory currently viewed
 # --- Model operations ---
 
 select_reset() {
-    _SEL_LIST=(); _SEL_SUB=(); _SEL_LABEL=(); _SEL_TARGET=(); _SEL_ON=()
+    _SEL_LIST=(); _SEL_SUB=(); _SEL_LABEL=(); _SEL_TARGET=(); _SEL_ON=(); _SEL_INFO=()
     _SEL_ATOMIC=" "
 }
 
-# Usage: select_add <list> <sub> <label> <target>
+# Usage: select_add <list> <sub> <label> <target> [info]
 select_add() {
-    _SEL_LIST+=("$1"); _SEL_SUB+=("$2"); _SEL_LABEL+=("$3"); _SEL_TARGET+=("$4"); _SEL_ON+=(1)
+    _SEL_LIST+=("$1"); _SEL_SUB+=("$2"); _SEL_LABEL+=("$3"); _SEL_TARGET+=("$4"); _SEL_ON+=(1); _SEL_INFO+=("${5:-}")
 }
 
 select_size() { echo "${#_SEL_LIST[@]}"; }
@@ -128,6 +129,24 @@ select_any_on() {
     [[ "$sel" -gt 0 ]]
 }
 
+# Usage: select_apply_scope all|important|system|flatpak|snap|pick
+# What the dialog's scope picker chose: everything, the critical and security
+# system packages only, one source only, or everything ticked for the menu.
+select_apply_scope() {
+    case "${1:-all}" in
+        all|pick)
+            select_set_all 1 ;;
+        important)
+            select_set_all 0
+            select_set system critical 1
+            select_set system security 1 ;;
+        system|flatpak|snap)
+            select_set_all 0
+            select_set "$1" "" 1 ;;
+        *) return 1 ;;
+    esac
+}
+
 # 0 when the list has rows at all
 select_has() {
     local sel tot
@@ -137,12 +156,36 @@ select_has() {
 
 # --- Rendering ---
 
+# Cut a label to a width, with an ellipsis
+_select_fit() {
+    local s="${1:-}" max="${2:-30}"
+    if [[ "${#s}" -gt "$max" ]]; then printf '%s…' "${s:0:$((max - 1))}"; else printf '%s' "$s"; fi
+}
+
+# The marker kind for a subcategory
+_select_sub_kind() {
+    case "${1:-}" in
+        critical|security) printf '%s' "$1" ;;
+        app|runtime)       printf 'flatpak' ;;
+        snap)              printf 'snap' ;;
+        *)                 printf 'standard' ;;
+    esac
+}
+
+# A tick box without lib/tui.sh (the tests source both; the runner has both)
 _select_box() {
+    if declare -F _tui_tick >/dev/null 2>&1; then _tui_tick "$1" "$2"; return 0; fi
     local sel="$1" tot="$2"
     if [[ "$tot" -eq 0 || "$sel" -eq 0 ]]; then printf '[ ]'
-    elif [[ "$sel" -eq "$tot" ]]; then printf '[x]'
+    elif [[ "$sel" -eq "$tot" ]]; then printf '[✓]'
     else printf '[-]'
     fi
+}
+_select_badge() {
+    if declare -F _tui_badge >/dev/null 2>&1; then _tui_badge "$@"; else printf ' '; fi
+}
+_select_key() {
+    if declare -F _tui_key >/dev/null 2>&1; then _tui_key "$@"; else printf '%s  %s' "$1" "${2:-}"; fi
 }
 
 # Build the number/letter map for the visible lists and subcategories
@@ -168,41 +211,42 @@ _select_build_map() {
 # The overview: lists with their subcategories and counts
 select_render() {
     _select_build_map
-    local c_num="${_TUI_CYAN:-}" c_dim="${_TUI_SHADOW:-}" c_bold="${_TUI_BOLD:-}" c_warn="${_TUI_WARNING:-}" c_reset="${_TUI_RESET:-}"
-    printf '\n    %b%b◆ CHOOSE WHAT TO UPDATE%b\n' "$c_bold" "$c_num" "$c_reset"
+    local c_key="${_TUI_BOLD:-}${_TUI_ACCENT:-}" c_dim="${_TUI_SHADOW:-}" c_bold="${_TUI_BOLD:-}" c_warn="${_TUI_WARNING:-}" c_reset="${_TUI_RESET:-}"
+    printf '\n    %b◆ CHOOSE WHAT TO UPDATE%b\n' "$c_key" "$c_reset"
     _tui_separator 2>/dev/null || true
     local n=0 list sub key sel tot letters="abcdefghij" li
     for list in "${_SEL_MAP_LIST[@]}"; do
         n=$((n + 1))
         read -r sel tot <<< "$(select_count "$list")"
-        printf '    %b%2d)%b %s %b%-32s%b %b%3d of %-3d%b\n' \
-            "$c_num" "$n" "$c_reset" "$(_select_box "$sel" "$tot")" \
-            "$c_bold" "${_SEL_LIST_TITLE[$list]}" "$c_reset" "$c_dim" "$sel" "$tot" "$c_reset"
+        printf '    %b%2d)%b %s %b%-30s%b %b%3d of %-3d%b\n' \
+            "$c_key" "$n" "$c_reset" "$(_select_box "$sel" "$tot")" \
+            "$c_bold" "$(_select_fit "${_SEL_LIST_TITLE[$list]}" 30)" "$c_reset" "$c_dim" "$sel" "$tot" "$c_reset"
         li=0
         for sub in ${_SEL_SUB_ORDER[$list]}; do
             read -r sel tot <<< "$(select_count "$list" "$sub")"
             [[ "$tot" -eq 0 ]] && continue
             key="${n}${letters:$li:1}"
             li=$((li + 1))
-            printf '        %b%3s)%b %s %-28s %b%3d of %-3d%b\n' \
-                "$c_num" "$key" "$c_reset" "$(_select_box "$sel" "$tot")" \
-                "${_SEL_SUB_TITLE[$sub]}" "$c_dim" "$sel" "$tot" "$c_reset"
+            printf '        %b%3s)%b %s %s %-26s %b%3d of %-3d%b\n' \
+                "$c_key" "$key" "$c_reset" "$(_select_box "$sel" "$tot")" \
+                "$(_select_badge "$(_select_sub_kind "$sub")")" "$(_select_fit "${_SEL_SUB_TITLE[$sub]}" 26)" \
+                "$c_dim" "$sel" "$tot" "$c_reset"
         done
         if select_is_atomic "$list"; then
             printf '        %b    this package manager updates everything or nothing; pick the whole list%b\n' "$c_warn" "$c_reset"
         fi
     done
     _tui_separator 2>/dev/null || true
-    printf '    %ba%b  select all     %bn%b  select none     %b1%b  toggle a list     %b1a%b  toggle a subcategory\n' \
-        "$c_num" "$c_reset" "$c_num" "$c_reset" "$c_num" "$c_reset" "$c_num" "$c_reset"
-    printf '    %bv 1a%b  pick single packages inside a subcategory\n' "$c_num" "$c_reset"
-    printf '    %bEnter%b  update what is ticked     %bq%b  cancel, update nothing\n' "$c_num" "$c_reset" "$c_num" "$c_reset"
+    printf '    %s   %s   %s   %s\n' "$(_select_key a 'select all')" "$(_select_key n 'select none')" \
+        "$(_select_key 1 'toggle a list')" "$(_select_key 1a 'toggle a subcategory')"
+    printf '    %s\n' "$(_select_key 'v 1a' 'pick single packages inside a subcategory')"
+    printf '    %s   %s\n' "$(_select_key Enter 'update what is ticked')" "$(_select_key q 'cancel, update nothing')"
 }
 
 # One subcategory, numbered, paged
 _select_render_sub() {
     local list="$1" sub="$2" page="$3" per="${4:-20}"
-    local c_num="${_TUI_CYAN:-}" c_dim="${_TUI_SHADOW:-}" c_bold="${_TUI_BOLD:-}" c_reset="${_TUI_RESET:-}"
+    local c_key="${_TUI_BOLD:-}${_TUI_ACCENT:-}" c_dim="${_TUI_SHADOW:-}" c_reset="${_TUI_RESET:-}"
     _SEL_VIEW_IDX=()
     local i
     for i in "${!_SEL_LIST[@]}"; do
@@ -213,18 +257,27 @@ _select_render_sub() {
     [[ "$pages" -lt 1 ]] && pages=1
     local start=$((page * per)) end=$(((page + 1) * per))
     [[ "$end" -gt "$total" ]] && end=$total
-    local sel tot
+    local sel tot kind
     read -r sel tot <<< "$(select_count "$list" "$sub")"
-    printf '\n    %b%b◆ %s · %s%b  %b%d of %d selected%b\n' "$c_bold" "$c_num" "${_SEL_LIST_TITLE[$list]}" "${_SEL_SUB_TITLE[$sub]}" "$c_reset" "$c_dim" "$sel" "$tot" "$c_reset"
+    kind=$(_select_sub_kind "$sub")
+    printf '\n    %b◆ %s · %s%b  %b%d of %d selected%b\n' "$c_key" "${_SEL_LIST_TITLE[$list]}" "${_SEL_SUB_TITLE[$sub]}" "$c_reset" "$c_dim" "$sel" "$tot" "$c_reset"
     _tui_separator 2>/dev/null || true
-    local k
+    # the name column is as wide as the longest name on the page, capped
+    local k w=0 name
+    for (( k=start; k<end; k++ )); do
+        name="${_SEL_LABEL[${_SEL_VIEW_IDX[$k]}]}"
+        (( ${#name} > w )) && w=${#name}
+    done
+    (( w > 34 )) && w=34
     for (( k=start; k<end; k++ )); do
         i="${_SEL_VIEW_IDX[$k]}"
-        printf '    %b%3d)%b %s %s\n' "$c_num" "$((k + 1))" "$c_reset" "$(_select_box "${_SEL_ON[$i]}" 1)" "${_SEL_LABEL[$i]}"
+        printf '    %b%3d)%b %s %s %-*s  %b%s%b\n' "$c_key" "$((k + 1))" "$c_reset" "$(_select_box "${_SEL_ON[$i]}" 1)" \
+            "$(_select_badge "$kind")" "$w" "$(_select_fit "${_SEL_LABEL[$i]}" "$w")" "$c_dim" "${_SEL_INFO[$i]:-}" "$c_reset"
     done
     _tui_separator 2>/dev/null || true
-    printf '    %bpage %d of %d%b   %b<%b prev  %b>%b next   %bnumber%b toggles   %ba%b all  %bn%b none   %bb%b back\n' \
-        "$c_dim" "$((page + 1))" "$pages" "$c_reset" "$c_num" "$c_reset" "$c_num" "$c_reset" "$c_num" "$c_reset" "$c_num" "$c_reset" "$c_num" "$c_reset" "$c_num" "$c_reset"
+    printf '    %bpage %d of %d%b   %s   %s   %s   %s   %s   %s\n' \
+        "$c_dim" "$((page + 1))" "$pages" "$c_reset" "$(_select_key '<' prev)" "$(_select_key '>' next)" \
+        "$(_select_key number toggles)" "$(_select_key a all)" "$(_select_key n none)" "$(_select_key b back)"
 }
 
 # --- Input ---

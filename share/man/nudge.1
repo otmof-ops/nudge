@@ -1,4 +1,4 @@
-.TH NUDGE 1 "October 2026" "nudge 2.1.0" "User Commands"
+.TH NUDGE 1 "October 2026" "nudge 2.2.0" "User Commands"
 .SH NAME
 nudge \- a gentle nudge to keep your system fresh
 .SH SYNOPSIS
@@ -7,12 +7,15 @@ nudge \- a gentle nudge to keep your system fresh
 .SH DESCRIPTION
 .B nudge
 is a lightweight login-time system update prompt for Linux desktops.
-It checks for available package updates after login and presents an
-interactive dialog asking whether you'd like to update. Accepting opens a
+It checks for available package updates after login and shows a dialog:
+the Nudge Bunny, how many updates there are and where from, the critical
+and security ones flagged, and the first names. Accepting asks what to
+install: everything, the critical and security updates only, one source
+only, the full list first, or one by one. Picking one by one opens a
 terminal window with the selection menu: every list of updates (system
 packages, Flatpak, Snap) with its subcategories (critical, security and
 other packages; applications and runtimes), select-all at each level, and
-single packages. Only what is ticked is updated, and sudo asks for a
+single packages. Only what is chosen is updated, and sudo asks for a
 password in that window.
 .PP
 nudge supports multiple package managers (apt, dnf, pacman, zypper),
@@ -246,6 +249,11 @@ Reboot required from previous upgrade.
 .PP
 A login or timer run with no display session exits 0 and records
 SKIPPED_NO_DISPLAY in the history instead of failing.
+.PP
+Under the login or timer trigger (the autostart entry and the systemd unit
+set \fB_NUDGE_TRIGGER\fR) the ordinary outcomes 1, 2, 4, 5, 9 and 13 exit 0,
+so the autostart service never shows as failed after "Not Now". The history
+and the JSON output keep the real code; a manual run exits with it.
 .SH FILES
 .TP
 .I ~/.config/nudge/nudge.conf

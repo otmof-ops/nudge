@@ -157,6 +157,20 @@ schedule_prompt_defer() {
 
     local choice=""
 
+    # The picker from lib/dialog.sh when it is loaded (the dispatcher loads it)
+    if declare -F dialog_defer_pick >/dev/null 2>&1; then
+        local quote=""
+        if declare -F bunny_message >/dev/null 2>&1; then
+            quote=$(bunny_message "declined" 2>/dev/null) || quote=""
+        fi
+        choice=$(dialog_defer_pick "$quote") || choice=""
+        if [[ -n "$choice" ]]; then
+            schedule_defer "$choice" || return 1
+            return 0
+        fi
+        return 1
+    fi
+
     case "${NOTIFY_BACKEND:-}" in
         kdialog)
             choice=$(kdialog --title "Remind Me Later" \

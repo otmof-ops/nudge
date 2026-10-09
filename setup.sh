@@ -3,12 +3,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # nudge — unified setup
 # Install, uninstall, configure, update, and status — all in one place.
-# Version: 2.1.0
+# Version: 2.2.0
 
 # shellcheck disable=SC2034  # NUDGE_VERSION is read by selfupdate.sh
 set -euo pipefail
 
-VERSION="2.1.0"
+VERSION="2.2.0"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # --- Find the libraries: the checkout's lib/, or an installed copy's ---
@@ -113,7 +113,7 @@ for arg in "$@"; do
         --help|-h)
             cat <<'HELPTEXT'
  (\__/)
- (='.'=)  nudge setup 2.1.0
+ (='.'=)  nudge setup 2.2.0
  (")_(")  unified installer, updater, and configurator
 
 Usage: setup.sh [OPTIONS]
@@ -388,6 +388,7 @@ _action_create_dirs() {
     local dirs=(
         "${_PREFIX}/.local/bin"
         "${_PREFIX}/.local/lib/nudge"
+        "${_PREFIX}/.local/lib/nudge/mascot"
         "${_PREFIX}/.config/nudge"
         "${_PREFIX}/.local/share/nudge"
         "${_PREFIX}/.config/autostart"
@@ -451,6 +452,7 @@ _action_install_scripts() {
     if [[ "$_DRY_RUN" == "true" ]]; then
         _tui_info "[dry-run] copy nudge.sh → ~/.local/bin/nudge.sh (and link nudge)"
         _tui_info "[dry-run] copy lib/*.sh → ~/.local/lib/nudge/"
+        _tui_info "[dry-run] copy share/mascot/*.svg → ~/.local/lib/nudge/mascot/"
         _tui_info "[dry-run] copy setup.sh → ~/.local/bin/nudge-setup.sh"
         return 0
     fi
@@ -464,8 +466,20 @@ _action_install_scripts() {
         _install_file "$f" "${_PREFIX}/.local/lib/nudge/$(basename "$f")" 0644 || return 1
     done
     local mod_count
-    mod_count=$(find "${_PREFIX}/.local/lib/nudge/" -name '*.sh' | wc -l)
+    mod_count=$(find "${_PREFIX}/.local/lib/nudge/" -maxdepth 1 -name '*.sh' | wc -l)
     _tui_info "Installed: ~/.local/lib/nudge/ — ${mod_count} modules"
+
+    # The Nudge Bunny the dialogs draw: beside the modules
+    if [[ -d "${SCRIPT_DIR}/share/mascot" ]]; then
+        mkdir -p "${_PREFIX}/.local/lib/nudge/mascot" || return 1
+        local svg_count=0
+        for f in "${SCRIPT_DIR}"/share/mascot/*.svg; do
+            [[ -f "$f" ]] || continue
+            _install_file "$f" "${_PREFIX}/.local/lib/nudge/mascot/$(basename "$f")" 0644 || return 1
+            svg_count=$((svg_count + 1))
+        done
+        _tui_info "Installed: ~/.local/lib/nudge/mascot/ — the Nudge Bunny, ${svg_count} moods"
+    fi
 
     _install_file "${SCRIPT_DIR}/setup.sh" "${_PREFIX}/.local/bin/nudge-setup.sh" 0755 || return 1
     _tui_info "Installed: ~/.local/bin/nudge-setup.sh"

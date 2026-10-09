@@ -106,7 +106,7 @@ setup() {
     [[ "$output" == *"Runtimes"* ]]
     [[ "$output" == *"Snaps"* ]]
     [[ "$output" == *"4 of 4"* ]]
-    [[ "$output" == *"[x]"* ]]
+    [[ "$output" == *"[✓]"* ]]
 }
 
 @test "select_render marks partial lists and empty subcategories are hidden" {
@@ -117,7 +117,7 @@ setup() {
     select_add snap snap "firefox" firefox
     run select_render
     [[ "$output" != *"System packages"* ]]
-    [[ "$output" == *"1) [x] Snap"* ]]
+    [[ "$output" == *"1) [✓] Snap"* ]]
 }
 
 @test "select_render notes an atomic list" {
@@ -181,4 +181,41 @@ setup() {
     run _select_render_sub system standard 2 20
     [[ "$output" == *"page 3 of 3"* ]]
     [[ "$output" == *"pkg-45"* ]]
+}
+
+@test "select_apply_scope: everything, the important ones, one source, the menu" {
+    select_apply_scope important
+    [[ "$(select_count system)" == "3 4" ]]
+    [[ "$(select_count system standard)" == "0 1" ]]
+    [[ "$(select_count flatpak)" == "0 2" ]]
+    [[ "$(select_count snap)" == "0 1" ]]
+    select_apply_scope snap
+    [[ "$(select_count system)" == "0 4" ]]
+    [[ "$(select_count snap)" == "1 1" ]]
+    select_apply_scope system
+    [[ "$(select_count system)" == "4 4" ]]
+    [[ "$(select_count flatpak)" == "0 2" ]]
+    select_apply_scope flatpak
+    [[ "$(select_count flatpak)" == "2 2" ]]
+    select_apply_scope pick
+    [[ "$(select_count system)" == "4 4" ]]
+    select_set_all 0
+    select_apply_scope all
+    [[ "$(select_count snap)" == "1 1" ]]
+    run ! select_apply_scope bogus
+}
+
+@test "the info column sits beside the label in the per-package view" {
+    select_reset
+    select_add system standard "vim" vim "1.0 → 1.1"
+    run _select_render_sub system standard 0 20
+    [[ "$output" == *"vim"*"1.0 → 1.1"* ]]
+}
+
+@test "select_render marks subcategories with their kind" {
+    run select_render
+    [[ "$output" == *"★ Critical system packages"* ]]
+    [[ "$output" == *"⚠ Security updates"* ]]
+    [[ "$output" == *"◆ Applications"* ]]
+    [[ "$output" == *"● Snaps"* ]]
 }

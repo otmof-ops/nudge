@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] — 2026-10-09
+
+The dialogs, redrawn around the mascot, and a login run that no longer shows
+as a failed service.
+
+### Added
+- **Rich dialogs.** kdialog shows Qt rich text: the Nudge Bunny in the mood of
+  the moment (the SVGs are installed beside the modules), a headline with the
+  counts, red and amber chips for critical and security updates, the bunny's
+  line, and the first package names, critical and security first. zenity shows
+  the same in Pango markup. `lib/dialog.sh` builds them, and every name is
+  escaped before it reaches the markup.
+- **The scope picker.** After Update Now, one question: everything, critical
+  and security updates only, one source only (offered when there are several),
+  pick one by one in the terminal, or show the full list first. The choice
+  travels to the terminal session as `scope=` in the session file; only "pick
+  one by one" opens the menu.
+- **The full list** as a scrollable box, grouped by source, with badges and
+  versions (rich text in kdialog, plain text in zenity).
+- Deferral in plain words ("In an hour", "Tomorrow", "Next week") and a restart
+  dialog, both with the bunny.
+- `lib/tui.sh` has a palette now: truecolor, 256 or 16 colours by what the
+  terminal reports. The selection menu and the update session use it: tick
+  boxes, kind markers (★ ⚠ ◆ ●), key hints, result lines after every step,
+  rounded frames, and the window title.
+- The JSON output and the session status carry `scope`.
+- `docs/assets/make-screenshots.sh` draws the dialogs on a virtual display for
+  the README.
+- Tests: 19 files; `test_dialog.bats` and `test_tui.bats` are new, and the
+  integration suite drives Update Now → the scope picker → the terminal session
+  through a read-only mock terminal.
+
+### Changed
+- The package list is no longer a text box shown before the question: the
+  prompt carries the first names, and the picker offers the full list.
+- The character SVGs moved from `docs/assets/` to `share/mascot/`; `setup.sh`
+  installs them to `~/.local/lib/nudge/mascot/`.
+- `bunny_say` and `bunny_mood` pick one line and one mood per run, so every
+  backend says the same thing; `bunny_render` takes the line as given.
+- `PREVIEW_UPDATES=false` keeps the names out of the prompt (the full list stays
+  a click away).
+
+### Fixed
+- **A declined login run no longer fails the autostart unit.** Under the login
+  or timer trigger the ordinary outcomes (declined, applied, disabled, offline,
+  deferred, reboot pending) exit 0; the history and the JSON keep the real
+  code, and a manual run still exits with it. Seen on 2026-10-09:
+  `app-nudge@autostart.service: Main process exited, status=1/FAILURE` after
+  Not Now.
+- A session file without a scope line (an older `nudge.sh` writing for a newer
+  runner) opens the menu rather than installing everything.
+- The zenity prompt escapes its text, so a `<` or `&` in a package name cannot
+  break the markup.
+
 ## [2.1.0] — 2026-10-09
 
 The public release: BSD 3-Clause, the selection menu, the bugs that made every

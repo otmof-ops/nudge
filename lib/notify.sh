@@ -2,7 +2,8 @@
 # SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/nudge)
 # SPDX-License-Identifier: BSD-3-Clause
 # nudge — lib/notify.sh
-# Notification backends — kdialog/zenity/dunst/dbus/notify-send
+# Notification backends — kdialog/zenity/dunst/dbus/notify-send. The rich
+# bodies come from lib/dialog.sh; without it the plain message is shown.
 
 set -euo pipefail
 
@@ -90,46 +91,46 @@ notify_detect() {
     return 0
 }
 
-# --- Show update preview (scrollable list); AUTO_DISMISS applies here too ---
-_show_preview_kdialog() {
-    local preview="$1"
-    local dismiss="${AUTO_DISMISS:-0}"
-    local -a wrap=()
-    [[ "$dismiss" -gt 0 ]] && wrap=(timeout "$dismiss")
-    # kdialog wants a real file for --textbox (a /dev/fd path shows up empty)
-    local tmp
-    tmp=$(umask 077 && mktemp) || return 0
-    printf '%s\n' "$preview" > "$tmp"
-    "${wrap[@]}" kdialog --title "Package Updates" \
-        --textbox "$tmp" 500 400 2>/dev/null || true
-    rm -f "$tmp"
-}
-
-_show_preview_zenity() {
-    local preview="$1"
-    local dismiss="${AUTO_DISMISS:-0}"
-    local -a timeout_arg=()
-    [[ "$dismiss" -gt 0 ]] && timeout_arg=("--timeout=$dismiss")
-    echo "$preview" | zenity --text-info \
-        --title="Package Updates" \
-        --width=500 --height=400 "${timeout_arg[@]}" 2>/dev/null || true
-}
-
-# --- kdialog backend ---
-_prompt_kdialog() {
-    local msg="$1" preview="${2:-}"
-    local dismiss="${AUTO_DISMISS:-0}"
-
-    # Show preview if enabled and available
-    if [[ -n "$preview" ]] && [[ "${PREVIEW_UPDATES:-true}" == "true" ]]; then
-        _show_preview_kdialog "$preview"
+# --- The prompt's body for a backend ---
+# The rich version once the package lists are loaded (lib/dialog.sh draws the
+# Nudge Bunny, the counts and the first names), the plain message otherwise.
+# Usage: _notify_rich_body html|pango <plain message>
+_notify_rich_body() {
+    local fmt="$1" msg="${2:-}"
+    if [[ "${_DIALOG_READY:-false}" == "true" ]]; then
+        case "$fmt" in
+            html)
+                if declare -F dialog_prompt_html >/dev/null 2>&1; then
+                    dialog_prompt_html "${DIALOG_QUOTE:-}" "${DIALOG_MOOD:-normal}" "${DIALOG_HINT:-}" "${DIALOG_NOTE:-}"
+                    return 0
+                fi ;;
+            pango)
+                if declare -F dialog_prompt_pango >/dev/null 2>&1; then
+                    dialog_prompt_pango "${DIALOG_QUOTE:-}" "${DIALOG_HINT:-}" "${DIALOG_NOTE:-}"
+                    return 0
+                fi ;;
+        esac
     fi
+    case "$fmt" in
+        html)
+            if declare -F dialog_plain_html >/dev/null 2>&1; then dialog_plain_html "$msg"; else printf '%b' "$msg"; fi ;;
+        pango)
+            if declare -F dialog_escape >/dev/null 2>&1; then dialog_escape "$(printf '%b' "$msg")"; else printf '%b' "$msg"; fi ;;
+    esac
+}
+
+# --- kdialog backend: rich text with the Nudge Bunny drawn in ---
+_prompt_kdialog() {
+    local msg="$1"
+    local dismiss="${AUTO_DISMISS:-0}"
+    local body
+    body=$(_notify_rich_body html "$msg")
 
     # The buttons say what they do: Yes = Update Now, No = Remind Me Later,
     # Cancel = Not Now (also Esc and closing the window).
-    local args=(--icon "$(_notify_icon name)" --title "System Updates Available"
+    local args=(--icon "$(_notify_icon name)" --title "nudge · updates"
                 --yes-label "Update Now" --no-label "Remind Me Later" --cancel-label "Not Now"
-                --yesnocancel "$msg")
+                --yesnocancel "$body")
 
     local rc=0 err=""
     if [[ "$dismiss" -gt 0 ]]; then
@@ -156,25 +157,21 @@ _prompt_kdialog() {
     esac
 }
 
-# --- zenity backend ---
+# --- zenity backend: Pango markup ---
 _prompt_zenity() {
-    local msg="$1" preview="${2:-}"
+    local msg="$1"
     local dismiss="${AUTO_DISMISS:-0}"
     local -a timeout_arg=()
-
-    # Show preview if enabled and available
-    if [[ -n "$preview" ]] && [[ "${PREVIEW_UPDATES:-true}" == "true" ]]; then
-        _show_preview_zenity "$preview"
-    fi
-
     [[ "$dismiss" -gt 0 ]] && timeout_arg=("--timeout=$dismiss")
+    local text
+    text=$(_notify_rich_body pango "$msg")
 
     local zen_output zen_err
     local rc=0
     zen_err=$(mktemp 2>/dev/null) || zen_err=""
     if zen_output=$(zenity --question --icon-name="$(_notify_icon name)" \
-        --title="System Updates Available" \
-        --text="$(echo -e "$msg")" \
+        --title="nudge · updates" --width=440 \
+        --text="$text" \
         --ok-label="Update Now" \
         --cancel-label="Not Now" \
         --extra-button="Remind Me Later" \
@@ -297,6 +294,14 @@ notify_prompt() {
 notify_reboot() {
     local _reboot_personality_msg
     _reboot_personality_msg=$(bunny_message "reboot" 2>/dev/null) || true
+    case "$NOTIFY_BACKEND" in
+        kdialog|zenity)
+            if declare -F dialog_reboot_ask >/dev/null 2>&1; then
+                if dialog_reboot_ask "$_reboot_personality_msg"; then return 0; fi
+                return 1
+            fi
+            ;;
+    esac
     local msg
     if [[ -n "$_reboot_personality_msg" ]]; then
         msg="${_reboot_personality_msg}\n\nReboot now?"

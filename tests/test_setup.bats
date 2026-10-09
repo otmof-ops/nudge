@@ -19,7 +19,7 @@ teardown() {
 @test "setup.sh --version prints version" {
     run "$SETUP" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge setup 2.1.0" ]]
+    [[ "$output" == "nudge setup 2.2.0" ]]
 }
 
 @test "setup.sh --help shows bunny and all flags" {
@@ -62,6 +62,10 @@ teardown() {
     [[ -d "$TMPDIR_TEST/.local/lib/nudge" ]]
     [[ -f "$TMPDIR_TEST/.config/nudge/nudge.conf" ]]
     [[ -f "$TMPDIR_TEST/.config/nudge.version" ]]
+    # the mascot the dialogs draw, beside the modules
+    [[ -f "$TMPDIR_TEST/.local/lib/nudge/mascot/bunny.svg" ]]
+    [[ -f "$TMPDIR_TEST/.local/lib/nudge/mascot/bunny-worried.svg" ]]
+    [[ "$(find "$TMPDIR_TEST/.local/lib/nudge/mascot" -name '*.svg' | wc -l)" -eq 8 ]]
 }
 
 @test "setup.sh --uninstall removes files" {
@@ -244,10 +248,10 @@ teardown() {
     [[ -L "$TMPDIR_TEST/.local/bin/nudge" ]]
     [[ -f "$TMPDIR_TEST/.local/share/icons/hicolor/scalable/apps/nudge.svg" ]]
     run "$TMPDIR_TEST/.local/bin/nudge" --version
-    [[ "$output" == "nudge 2.1.0" ]]
+    [[ "$output" == "nudge 2.2.0" ]]
     run "$TMPDIR_TEST/.local/bin/nudge-setup.sh" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge setup 2.1.0" ]]
+    [[ "$output" == "nudge setup 2.2.0" ]]
 }
 
 @test "uninstall --keep-config keeps the history and state as well" {

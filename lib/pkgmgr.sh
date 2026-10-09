@@ -553,8 +553,11 @@ pkgmgr_build_json_packages() {
 # ============================================================
 
 # --- Write the session file the terminal runner reads ---
-# Usage: pkgmgr_write_session -> prints the path
+# Usage: pkgmgr_write_session [scope] -> prints the path
+# The scope is what the dialog's picker chose: all, important, system,
+# flatpak, snap, or pick (the terminal menu).
 pkgmgr_write_session() {
+    local scope="${1:-all}"
     local dir="${NUDGE_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/nudge}"
     mkdir -p "$dir" 2>/dev/null || { log_error "Cannot create state directory: $dir"; return 1; }
     local sess
@@ -563,6 +566,7 @@ pkgmgr_write_session() {
         echo "# nudge upgrade session (temporary, read by: nudge.sh --_run-upgrade)"
         echo "pkgmgr=${DETECTED_PKGMGR}"
         echo "arch=$(pkgmgr_native_arch)"
+        echo "scope=${scope}"
         echo "[system]"
         [[ -n "$PKG_UPDATE_LIST" ]] && printf '%s\n' "$PKG_UPDATE_LIST"
         echo "[flatpak]"
@@ -657,9 +661,11 @@ _pkgmgr_wait_session() {
 }
 
 # --- Run the upgrade session in a terminal and collect the result ---
+# Usage: pkgmgr_upgrade [scope]
 # Returns 0 when the session completed, 1 when it failed or never ran,
 # 2 when the user cancelled at the selection menu. Details land in _UPG_*.
 pkgmgr_upgrade() {
+    local scope="${1:-all}"
     _UPG_CANCELLED=0
     _UPG_SYSTEM="skipped"; _UPG_FLATPAK="skipped"; _UPG_SNAP="skipped"
     _UPG_SELECTED_SYSTEM=0; _UPG_SELECTED_FLATPAK=0; _UPG_SELECTED_SNAP=0
@@ -679,7 +685,7 @@ pkgmgr_upgrade() {
     fi
 
     local sess
-    sess=$(pkgmgr_write_session) || return 1
+    sess=$(pkgmgr_write_session "$scope") || return 1
     local status_file="${sess}.status"
     ( umask 077; : > "$status_file" ) || return 1
 
@@ -707,6 +713,7 @@ pkgmgr_upgrade() {
 _RUNNER_STATUS=""
 _RUNNER_PKGMGR=""
 _RUNNER_ARCH=""
+_RUNNER_SCOPE="pick"   # a session without a scope line means nobody chose yet: the menu
 
 _runner_status_write() {
     [[ -n "$_RUNNER_STATUS" ]] || return 0
@@ -752,13 +759,21 @@ _runner_load_session() {
     fi
 
     select_reset
+    _RUNNER_SCOPE="pick"
     local section="" line native
-    local name from_ver to_ver priority arch sec kind ref app label target sub
+    local name from_ver to_ver priority arch sec kind ref app label info target sub
     while IFS= read -r line || [[ -n "$line" ]]; do
         [[ -z "$line" || "$line" == \#* ]] && continue
         case "$line" in
             pkgmgr=*) _RUNNER_PKGMGR="${line#pkgmgr=}"; continue ;;
             arch=*)   _RUNNER_ARCH="${line#arch=}"; continue ;;
+            scope=*)
+                _RUNNER_SCOPE="${line#scope=}"
+                case "$_RUNNER_SCOPE" in
+                    all|important|system|flatpak|snap|pick) ;;
+                    *) _RUNNER_SCOPE="pick" ;;
+                esac
+                continue ;;
             "[system]"|"[flatpak]"|"[snap]") section="${line//[][]/}"; continue ;;
         esac
         case "$section" in
@@ -776,9 +791,10 @@ _runner_load_session() {
                     *)        sub="standard" ;;
                 esac
                 label="$target"
-                if [[ -n "$from_ver" ]]; then label+="  ${from_ver} → ${to_ver}"
-                elif [[ -n "$to_ver" ]]; then label+="  → ${to_ver}"; fi
-                select_add system "$sub" "${label//[[:cntrl:]]/}" "$target"
+                info=""
+                if [[ -n "$from_ver" ]]; then info="${from_ver} → ${to_ver}"
+                elif [[ -n "$to_ver" ]]; then info="→ ${to_ver}"; fi
+                select_add system "$sub" "${label//[[:cntrl:]]/}" "$target" "${info//[[:cntrl:]]/}"
                 ;;
             flatpak)
                 IFS='|' read -r kind ref app name to_ver <<< "$line"
@@ -787,16 +803,18 @@ _runner_load_session() {
                 sub="app"; [[ "$kind" == "runtime" ]] && sub="runtime"
                 label="${name:-$app}"
                 [[ -n "$app" && "$app" != "$name" ]] && label+="  ($app)"
-                [[ -n "$to_ver" ]] && label+="  → ${to_ver}"
-                select_add flatpak "$sub" "${label//[[:cntrl:]]/}" "$ref"
+                info=""
+                [[ -n "$to_ver" ]] && info="→ ${to_ver}"
+                select_add flatpak "$sub" "${label//[[:cntrl:]]/}" "$ref" "${info//[[:cntrl:]]/}"
                 ;;
             snap)
                 IFS='|' read -r name to_ver _ _ _ <<< "$line"
                 [[ -z "$name" ]] && continue
                 _runner_valid_target snap "$name" || continue
                 label="$name"
-                [[ -n "$to_ver" ]] && label+="  → ${to_ver}"
-                select_add snap snap "${label//[[:cntrl:]]/}" "$name"
+                info=""
+                [[ -n "$to_ver" ]] && info="→ ${to_ver}"
+                select_add snap snap "${label//[[:cntrl:]]/}" "$name" "${info//[[:cntrl:]]/}"
                 ;;
         esac
     done < "$sess"
@@ -816,6 +834,11 @@ _runner_sudo() {
     if [[ -x /usr/bin/sudo ]]; then echo /usr/bin/sudo; else echo sudo; fi
 }
 
+# A result line, with lib/tui.sh when it is loaded
+_runner_result() {
+    if declare -F _tui_result >/dev/null 2>&1; then _tui_result "$1" "$2"; else printf '    %s %s\n' "$1" "$2"; fi
+}
+
 _runner_run_step() {
     # Usage: _runner_run_step <title> <command...>
     local title="$1"; shift
@@ -824,9 +847,14 @@ _runner_run_step() {
     echo ""
     _tui_operation_header "$title"
     printf '    %b$ %s%b\n\n' "${_TUI_SHADOW:-}" "$*" "${_TUI_RESET:-}"
-    if "${argv[@]}"; then
+    local rc=0
+    "${argv[@]}" || rc=$?
+    echo ""
+    if [[ "$rc" -eq 0 ]]; then
+        _runner_result ok "${title}: done"
         return 0
     fi
+    _runner_result fail "${title}: exit ${rc}"
     return 1
 }
 
@@ -839,14 +867,23 @@ _runner_exec_command() {
         printf '    %b[!] The update command was rejected: %s%b\n' "${_TUI_WARNING:-}" "${_UPDATE_COMMAND_ERROR:-invalid}" "${_TUI_RESET:-}"
         return 1
     fi
+    local rc=0
     while IFS= read -r line; do
         [[ -z "$line" ]] && continue
         local -a argv=()
         read -ra argv <<< "$line"
         [[ "${argv[0]}" == "sudo" ]] && argv[0]=$(_runner_sudo)
         printf '    %b$ %s%b\n' "${_TUI_SHADOW:-}" "$line" "${_TUI_RESET:-}"
-        "${argv[@]}" || return 1
+        rc=0
+        "${argv[@]}" || rc=$?
+        if [[ "$rc" -ne 0 ]]; then
+            echo ""
+            _runner_result fail "${line}: exit ${rc}"
+            return 1
+        fi
     done <<< "$parsed"
+    echo ""
+    _runner_result ok "done"
     return 0
 }
 
@@ -936,6 +973,38 @@ _runner_record_counts() {
     done
 }
 
+# What the chosen scope covers, for the greeting
+_runner_scope_line() {
+    local list sel tot out=""
+    for list in system flatpak snap; do
+        read -r sel tot <<< "$(select_count "$list")"
+        [[ "$tot" -gt 0 ]] || continue
+        out+="${out:+ · }${_SEL_LIST_TITLE[$list]}: ${sel} of ${tot}"
+    done
+    printf '%s' "$out"
+}
+
+# The closing lines
+_runner_summary() {
+    local failures="$1" list sel tot parts=""
+    local personality="${BUNNY_PERSONALITY:-disney}"
+    for list in system flatpak snap; do
+        read -r sel tot <<< "$(select_count "$list")"
+        [[ "$sel" -gt 0 ]] || continue
+        parts+="${parts:+ · }${_SEL_LIST_TITLE[$list]}: ${sel}"
+    done
+    echo ""
+    if [[ "$failures" -eq 0 ]]; then
+        local done_msg="all done! everything you picked is fresh."
+        [[ "$personality" == "classic" ]] && done_msg="Done. Everything selected was updated."
+        _tui_bunny "$done_msg" "$parts" "${BUNNY_FACE_HAPPY:-^.^}"
+    else
+        local fail_msg="some of that didn't go through."
+        [[ "$personality" == "classic" ]] && fail_msg="Some steps failed."
+        _tui_bunny "$fail_msg" "read the output above; nothing else was changed." "${BUNNY_FACE_WORRIED:-o.o}"
+    fi
+}
+
 # --- Entry point: nudge.sh --_run-upgrade <session> ---
 pkgmgr_run_upgrade_session() {
     local sess="${1:-}"
@@ -948,16 +1017,18 @@ pkgmgr_run_upgrade_session() {
     fi
     _runner_status_write pid "$$"
     _runner_status_write started "$(date -Iseconds 2>/dev/null || date)"
+    _runner_status_write scope "$_RUNNER_SCOPE"
+    select_apply_scope "$_RUNNER_SCOPE" || select_apply_scope all
 
     local personality="${BUNNY_PERSONALITY:-disney}"
     local face="${BUNNY_FACE_NORMAL:-}"
-    local greeting="pick what to update, then press Enter."
-    [[ "$personality" == "classic" ]] && greeting="Choose the updates to apply, then press Enter."
-    echo ""
-    _tui_draw_header "NUDGE" "update session"
-    _tui_bunny "$greeting" "untick anything you want to keep as it is." "$face"
+    _tui_title "nudge · update session"
+    _tui_draw_header "nudge · update session"
 
-    if [[ "${SELECT_UPDATES:-true}" == "true" ]]; then
+    if [[ "$_RUNNER_SCOPE" == "pick" ]]; then
+        local greeting="pick what to update, then press Enter."
+        [[ "$personality" == "classic" ]] && greeting="Choose the updates to apply, then press Enter."
+        _tui_bunny "$greeting" "untick anything you want to keep as it is." "$face"
         if ! select_run; then
             _runner_record_counts
             _runner_status_write cancelled 1
@@ -965,6 +1036,13 @@ pkgmgr_run_upgrade_session() {
             _tui_bunny "okay! nothing touched." "" "$face"
             return 0
         fi
+        _tui_clear
+        _tui_draw_header "nudge · update session"
+        _tui_bunny "here we go! installing what you ticked." "$(_runner_scope_line)" "$face"
+    else
+        local greeting="here we go! installing what you asked for."
+        [[ "$personality" == "classic" ]] && greeting="Applying the selected updates."
+        _tui_bunny "$greeting" "$(_runner_scope_line)" "$face"
     fi
     _runner_record_counts
 
@@ -1000,13 +1078,6 @@ pkgmgr_run_upgrade_session() {
     _runner_apply_flatpak || failures=$((failures + 1))
     _runner_apply_snap || failures=$((failures + 1))
 
-    echo ""
-    if [[ "$failures" -eq 0 ]]; then
-        local happy="${BUNNY_FACE_HAPPY:-^.^}"
-        _tui_bunny "all done! everything you picked is fresh." "" "$happy"
-    else
-        local sad="${BUNNY_FACE_WORRIED:-o.o}"
-        _tui_bunny "some of that didn't go through." "read the output above; nothing else was changed." "$sad"
-    fi
+    _runner_summary "$failures"
     return 0
 }
