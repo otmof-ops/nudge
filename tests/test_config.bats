@@ -1,6 +1,8 @@
 #!/usr/bin/env bats
 # SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/nudge)
 # SPDX-License-Identifier: BSD-3-Clause
+
+bats_require_minimum_version 1.5.0
 # Tests for lib/config.sh — load, validate, migrate
 
 setup() {
