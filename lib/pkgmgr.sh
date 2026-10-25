@@ -658,7 +658,7 @@ _pkgmgr_read_status() {
                 read -ra _names <<< "$value"
                 for _n in "${_names[@]}"; do
                     if declare -F retry_valid_name >/dev/null 2>&1; then retry_valid_name "$_n" || continue
-                    else [[ "$_n" =~ ^[A-Za-z0-9][A-Za-z0-9+._:/@-]{0,127}$ ]] || continue; fi
+                    else LC_ALL=C bash -c '[[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9+._:/@-]{0,127}$ ]]' _ "$_n" 2>/dev/null || continue; fi
                     _kept+=("$_n")
                 done
                 _UPG_CULPRITS["${key#culprits_}"]="${_kept[*]:-}" ;;
@@ -891,12 +891,18 @@ _runner_result() {
 _runner_exec_argv() {
     local rc=0
     if [[ -n "$_RUNNER_STEP_LOG" ]]; then
+        # the exit code below is the command's own whatever the caller's
+        # options: pipefail is this function's, restored on return
+        local -
+        set -o pipefail
         # one command's words at a time: what an earlier, successful command
         # warned about must not be read as the reason this one failed
         : > "$_RUNNER_STEP_LOG" 2>/dev/null || true
-        # tee ends when the pipe closes: a child the command leaves behind
-        # holding its stderr would keep the step open until that child exits
-        { "$@" 2>&1 1>&3 | tee -a "$_RUNNER_STEP_LOG" >&2 || rc="${PIPESTATUS[0]}"; } 3>&1
+        # tee -i ignores the Ctrl-C that apt and dpkg defer, so their stderr
+        # has somewhere to go until they stop; tee ends when the pipe closes,
+        # so a child the command leaves behind holding its stderr would keep
+        # the step open until that child exits
+        { "$@" 2>&1 1>&3 | tee -ia "$_RUNNER_STEP_LOG" >&2 || rc="${PIPESTATUS[0]}"; } 3>&1
     else
         "$@" || rc=$?
     fi

@@ -54,6 +54,13 @@ happening.
   the window closes a dialog with the bunny offers it (**Show Report** /
   **Close**; kdialog shows it in a text box, zenity in a monospace one; the
   passive backends say where it is). nudge never runs a remedy itself.
+- What is quoted from the package manager is scrubbed before it is shown or
+  kept in a report: escape sequences, C0 and C1 controls, the invisible and
+  direction-changing characters, and a user:password or a token in a URL
+  (`[redacted]`); the raw capture keeps the manager's own words, 0600, named
+  by `mktemp`. The names the diagnosis pulls out are validated in the C
+  locale, so a look-alike letter never passes. `tee` ignores the Ctrl-C that
+  apt and dpkg defer, so their stderr has somewhere to go until they stop.
 - `nudge --failures` (the ledger and the latest report), `--failures --json`,
   `--failures --clear` (forgets the ledger, the reports and the captured
   output). The newest 20 reports and 30 captures are kept; the capture of an

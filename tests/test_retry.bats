@@ -97,7 +97,7 @@ _captured() {
 }
 
 @test "flatpak: a remote that cannot be reached is named; an app that failed is named; no room is no room" {
-    retry_diagnose flatpak apt 1 "$(_captured a "error: Unable to load summary from remote flathub: While fetching https://dl.flathub.org/repo/summary.idx: [6] Couldn't resolve host name")"
+    retry_diagnose flatpak apt 1 "$(_captured a "error: Unable to load summary from remote flathub: Server returned status 503: Service Unavailable")"
     [[ "$_RETRY_CAUSE" == "repo-unreachable" ]]
     [[ "$_RETRY_CULPRITS" == "flathub" ]]
     [[ "$(retry_cause_remedy repo-unreachable apt flatpak flathub)" == *"flatpak remote-ls flathub"* ]]
@@ -174,6 +174,28 @@ _captured() {
     [[ "$_RETRY_CAUSE" == "network" ]]
     retry_diagnose system apt 100 "$(_captured d "E: Unable to locate package libfoo404")"
     [[ "$_RETRY_CAUSE" == "unknown" ]]
+}
+
+@test "no DNS on dnf is the network, never a repository to disable for good" {
+    retry_diagnose system dnf 1 "$(_captured a "Errors during downloading metadata for repository 'updates':" "  - Curl error (6): Couldn't resolve host name for https://mirrors.fedoraproject.org/metalink?repo=updates-released-f40 [Could not resolve host: mirrors.fedoraproject.org]" "Error: Failed to download metadata for repo 'updates': Cannot prepare internal mirrorlist: Curl error (6): Couldn't resolve host name")"
+    [[ "$_RETRY_CAUSE" == "network" ]]
+    [[ "$(retry_cause_remedy repo-unreachable dnf system updates)" != *"set-disabled"* ]]
+    retry_diagnose flatpak apt 1 "$(_captured b "error: Unable to load summary from remote flathub: While fetching https://dl.flathub.org/repo/summary.idx: [6] Couldn't resolve host name")"
+    [[ "$_RETRY_CAUSE" == "network" ]]
+}
+
+@test "what is quoted is scrubbed: credentials in a URL, invisible characters; look-alike letters are not names" {
+    retry_diagnose system apt 100 "$(_captured a "E: Failed to fetch https://user:s3cret@repo.example.org/pool/x.deb?token=abc123&x=1  404  Not Found")"
+    [[ "$_RETRY_CAUSE" == "mirror-stale" ]]
+    [[ "$_RETRY_EVIDENCE" == *"https://[redacted]@repo.example.org/"* ]]
+    [[ "$_RETRY_EVIDENCE" == *"token=[redacted]&x=1"* ]]
+    [[ "$_RETRY_EVIDENCE" != *"s3cret"* && "$_RETRY_EVIDENCE" != *"abc123"* ]]
+    retry_diagnose system apt 100 "$(_captured b $'E: Could not get lock \xe2\x80\xae/var/lib/dpkg/lock\xe2\x80\x8b-frontend. It is held by process 77 (apt)\xc2\x9b')"
+    [[ "$_RETRY_EVIDENCE" != *$'\xe2\x80\xae'* && "$_RETRY_EVIDENCE" != *$'\xe2\x80\x8b'* && "$_RETRY_EVIDENCE" != *$'\xc2\x9b'* ]]
+    [[ "$_RETRY_CULPRITS" == "77" ]]
+    run ! retry_valid_name $'v\xd1\x96m'
+    run ! retry_valid_name $'vim\xe2\x80\x8b'
+    retry_valid_name "vim"
 }
 
 @test "every blamed name is kept, the last one too" {
@@ -404,7 +426,7 @@ _captured() {
 @test "a capture file is private and in the logs directory" {
     local f
     f=$(retry_log_path system 1)
-    [[ "$f" == "$RETRY_LOG_DIR"/upgrade-*-system-1.log ]]
+    [[ "$f" == "$RETRY_LOG_DIR"/upgrade-*-system-1.*.log ]]
     [[ -f "$f" && "$(stat -c %a "$f")" == "600" ]]
 }
 

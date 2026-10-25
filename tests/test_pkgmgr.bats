@@ -735,7 +735,7 @@ _ok_flatpak_step() { echo "flatpak" >> "$TMPDIR_TEST/calls"; _runner_status_writ
     [[ "$output" == *"the error output is at"* ]]
     run ! grep -q '^report=' "$_RUNNER_STATUS"
     [[ "$(retry_ledger_rows | cut -f2 | sort | tr '\n' ' ')" == "openssl vim " ]]
-    ls "$NUDGE_STATE_DIR"/logs/upgrade-*-system-1.log >/dev/null
+    ls "$NUDGE_STATE_DIR"/logs/upgrade-*-system-1.*.log >/dev/null
 }
 
 @test "the attempts stop at RETRY_MAX_ATTEMPTS, and with RETRY_ASK=false nobody is asked" {

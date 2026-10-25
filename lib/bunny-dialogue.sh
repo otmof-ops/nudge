@@ -92,7 +92,7 @@ _BUNNY_MSG_ZERO=(
 )
 
 _BUNNY_MSG_FAILED=(
-    "uh oh... some of that didn't go through."
+    "uh oh... one of em got stuck."
     "hmm. that one got stuck. wanna try again?"
     "oopsie. not everything made it. one more go?"
 )

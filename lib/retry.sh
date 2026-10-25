@@ -49,13 +49,29 @@ _retry_mkdir() {
 # A name as the ledger, the status file and the dialogs accept it: a package,
 # a snap, a Flatpak ref, a key id or a pid, never a shell word
 retry_valid_name() {
+    # in the C locale: elsewhere a bracket range is a collation range, and
+    # letters that only look like these would pass
+    local LC_ALL=C
     [[ "${1:-}" =~ ^[A-Za-z0-9][A-Za-z0-9+._:/@-]{0,127}$ ]]
+}
+
+# What never belongs in a line that is shown or kept: escape sequences, C0
+# and C1 controls, the invisible and direction-changing characters, and a
+# user:password or a token in a URL (the raw capture keeps what the package
+# manager wrote; these lines are the ones quoted and shown)
+_retry_scrub() {
+    LC_ALL=C sed -E \
+        -e 's|\x1b\[[0-9;?]*[ -/]*[@-~]||g; s|\x1b[@-Z\\-_]||g' \
+        -e 's|\xc2[\x80-\x9f]||g; s|\xe2\x80[\x8b-\x8f\xaa-\xae]||g; s|\xe2\x81[\xa0-\xa9]||g; s|\xef\xbb\xbf||g' \
+        -e 's|://[^/@[:space:]]+@|://[redacted]@|g' \
+        -e 's#([?&;](access_)?(token|key|sig|signature|password|passwd|secret|X-Amz-[A-Za-z-]+)=)[^&[:space:]]*#\1[redacted]#gI' \
+        2>/dev/null
 }
 
 # Escape codes and control characters out, one line in
 _retry_clean_line() {
     local s="${1:-}"
-    s=$(printf '%s' "$s" | sed -E 's|\x1b\[[0-9;?]*[ -/]*[@-~]||g; s|\x1b[@-Z\\-_]||g' 2>/dev/null || printf '%s' "$s")
+    s=$(printf '%s' "$s" | _retry_scrub || printf '%s' "$s")
     s="${s//[[:cntrl:]]/}"
     s="${s#"${s%%[![:space:]]*}"}"
     s="${s%"${s##*[![:space:]]}"}"
@@ -69,7 +85,7 @@ _retry_load_text() {
     _RETRY_TEXT=""
     [[ -n "$f" && -f "$f" && ! -L "$f" ]] || return 0
     _RETRY_TEXT=$(tail -n 400 "$f" 2>/dev/null \
-        | sed -E 's|\x1b\[[0-9;?]*[ -/]*[@-~]||g; s|\x1b[@-Z\\-_]||g' 2>/dev/null \
+        | _retry_scrub \
         | tr -d '\000-\010\013-\037\177' 2>/dev/null || true)
 }
 
@@ -231,21 +247,23 @@ retry_diagnose() {
         _retry_set index-corrupt 'mismatch|not valid yet|expired|isn.t valid|Splitting|corrupted|Checksum'
         return 0
     fi
-    # A repository that cannot be reached, or is gone
-    if _retry_has "Failed to download metadata for repo|Repository '[^']+' is invalid|Problem retrieving|Could not refresh|Valid metadata not found|No remote refs found|Unable to load summary|Error updating remote metadata|Failed to update remote metadata|Timeout exceeded when accessing"; then
-        _retry_set repo-unreachable 'metadata|Repository|Problem retrieving|refresh|remote refs|summary|Timeout'
-        _RETRY_CULPRITS=$(_retry_names "(for repo|Repository) '([A-Za-z0-9._:-]+)'" 2)
-        [[ -z "$_RETRY_CULPRITS" ]] && _RETRY_CULPRITS=$(_retry_names '(for|from) remote ([A-Za-z0-9._-]+)' 2)
-        return 0
-    fi
     # snapd itself is not there to talk to
     if [[ "$list" == "snap" ]] && _retry_has 'dial unix .*snapd\.socket|cannot connect to snapd|snapd\.socket: connect'; then
         _retry_set snapd-down 'snapd|socket'
         return 0
     fi
-    # The network itself (before the mirror: a download that never started is not a stale index)
-    if _retry_has 'Temporary failure resolving|Could not resolve|Could not connect to|Connection failed|Connection timed out|Connection refused|Unable to connect to|Network is unreachable|cannot communicate with server|persistent network error|cannot download|Could not resolve host|Failed to connect|Timeout was reached|network timeout|download library error|Couldn.t connect|Could not reach'; then
-        _retry_set network 'resolv|connect|Connection|unreachable|communicate|network|download|Timeout|reach'
+    # The network itself, before a repository that is "gone" and before the
+    # mirror: no DNS is neither a dead repository nor a stale index, and the
+    # advice for those is not the advice for this
+    if _retry_has 'Temporary failure resolving|Could not resolve|Couldn.t resolve|resolve host name|Could not connect to|Connection failed|Connection timed out|Connection refused|Unable to connect to|Network is unreachable|cannot communicate with server|persistent network error|Failed to connect|Timeout was reached|network timeout|download library error|Couldn.t connect|Could not reach|Curl error \(?(6|7|28)\)?|Name or service not known|No route to host'; then
+        _retry_set network 'resolv|connect|Connection|unreachable|communicate|network|download|Timeout|reach|Curl error|No route'
+        return 0
+    fi
+    # A repository that cannot be reached, or is gone
+    if _retry_has "Failed to download metadata for repo|Repository '[^']+' is invalid|Problem retrieving|Could not refresh|Valid metadata not found|No remote refs found|Unable to load summary|Error updating remote metadata|Failed to update remote metadata|Timeout exceeded when accessing"; then
+        _retry_set repo-unreachable 'metadata|Repository|Problem retrieving|refresh|remote refs|summary|Timeout'
+        _RETRY_CULPRITS=$(_retry_names "(for repo|Repository) '([A-Za-z0-9._:-]+)'" 2)
+        [[ -z "$_RETRY_CULPRITS" ]] && _RETRY_CULPRITS=$(_retry_names '(for|from) remote ([A-Za-z0-9._-]+)' 2)
         return 0
     fi
     # The mirror no longer has it: an HTTP 404, or apt's "unable to fetch" with the network fine
@@ -588,7 +606,7 @@ retry_cause_remedy() {
                         dnf)
                             echo '$ sudo dnf clean all'
                             echo "for this upgrade only: sudo dnf upgrade --disablerepo=${first:-<repo>}"
-                            echo "for good: sudo dnf config-manager --set-disabled ${first:-<repo>}" ;;
+                            echo 'a repository that is gone for good is disabled in its file under /etc/yum.repos.d/; the distribution'"'"'s own repositories never are' ;;
                         zypper)
                             echo '$ sudo zypper refresh'
                             echo "if it is gone: sudo zypper modifyrepo --disable ${first:-<alias>}" ;;
@@ -690,6 +708,7 @@ retry_cause_remedy() {
 
 _retry_ledger_valid() {
     # Usage: _retry_ledger_valid <list> <target> <count> <first> <last> <cause>
+    local LC_ALL=C
     [[ "${1:-}" =~ ^(system|flatpak|snap)$ ]] || return 1
     retry_valid_name "${2:-}" || return 1
     [[ "${3:-}" =~ ^[1-9][0-9]{0,5}$ ]] || return 1
@@ -842,8 +861,9 @@ retry_log_path() {
     local list="${1:-system}" attempt="${2:-1}" ts
     _retry_mkdir "$RETRY_LOG_DIR" || return 1
     ts=$(date '+%Y%m%d-%H%M%S' 2>/dev/null || echo now)
-    local f="${RETRY_LOG_DIR}/upgrade-${ts}-${list}-${attempt}.log"
-    ( umask 077; : > "$f" ) 2>/dev/null || return 1
+    local f
+    # a name nobody can plant in advance (same user or not): mktemp, never ": >"
+    f=$(umask 077 && mktemp --suffix=.log "${RETRY_LOG_DIR}/upgrade-${ts}-${list}-${attempt}.XXXXXX" 2>/dev/null) || return 1
     # the newest RETRY_LOG_MAX stay, this one among them
     _retry_rotate "$RETRY_LOG_DIR" 'upgrade-*.log' "$RETRY_LOG_MAX"
     printf '%s' "$f"
@@ -853,10 +873,11 @@ retry_log_path() {
 _retry_rotate() {
     local dir="$1" glob="$2" max="$3" count f
     [[ -d "$dir" ]] || return 0
-    count=$(find "$dir" -maxdepth 1 -name "$glob" -type f 2>/dev/null | wc -l || echo 0)
+    count=$(find "$dir" -maxdepth 1 -name "$glob" -type f -print0 2>/dev/null | tr -cd '\0' | wc -c || echo 0)
     [[ "$count" -gt "$max" ]] || return 0
-    find "$dir" -maxdepth 1 -name "$glob" -type f 2>/dev/null | LC_ALL=C sort | head -n $((count - max)) \
-        | while IFS= read -r f; do rm -f "$f" 2>/dev/null; done
+    # NUL-separated end to end: a file name is not a line
+    find "$dir" -maxdepth 1 -name "$glob" -type f -print0 2>/dev/null | LC_ALL=C sort -z | head -z -n $((count - max)) \
+        | xargs -0 -r rm -f -- 2>/dev/null
     return 0
 }
 

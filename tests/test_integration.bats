@@ -491,7 +491,7 @@ EOT
     [[ "$status" -eq 2 ]]
     [[ "$(wc -l < "$FLATPAK_CALLS")" -eq 2 ]]
     [[ "$output" == *"didn't go through"* ]]
-    [[ "$output" == *"the repository flathub could not be reached"* ]]
+    [[ "$output" == *"the servers could not be reached"* ]]
     [[ "$output" == *"Try the failed ones again?"* ]]
     [[ "$output" == *"Attempt 2 of 3"* ]]
     [[ "$output" == *"all done!"* ]]
@@ -516,22 +516,22 @@ EOT
     [[ "$output" == *"this keeps failing"* ]]
     [[ "$output" == *"nudge · failure report"* ]]
     [[ "$output" == *"the same update has failed 2 times"* ]]
-    [[ "$output" == *"flatpak remote-ls flathub"* ]]
+    [[ "$output" == *"flatpak remotes"* ]]
     local report
     report=$(ls "$XDG_DATA_HOME"/nudge/reports/failure-*.txt)
     [[ -f "$report" && "$(stat -c %a "$report")" == "600" ]]
-    grep -q 'the repository flathub could not be reached' "$report"
+    grep -q 'the servers could not be reached' "$report"
     grep -q "report: $report" "$XDG_DATA_HOME/nudge/history.jsonl"
     grep -q 'flatpak:failed (1/1)' "$XDG_DATA_HOME/nudge/history.jsonl"
     # the dialog offered the report with the causes drawn in
     grep -qx 'Show Report' "$_INTEGRATION_TMPDIR/kdialog.log"
-    grep -q 'the repository flathub could not be reached' "$_INTEGRATION_TMPDIR/kdialog.log"
+    grep -q 'the servers could not be reached' "$_INTEGRATION_TMPDIR/kdialog.log"
     grep -q 'failed 2 times' "$_INTEGRATION_TMPDIR/kdialog.log"
     # the ledger has the row, and --failures shows it with the report
     grep -q $'flatpak\tapp/org.x.Y/x86_64/stable\t2' "$XDG_DATA_HOME/nudge/failures.tsv"
     run "$NUDGE" --failures
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *"app/org.x.Y/x86_64/stable"*"2"*"repo-unreachable"* ]]
+    [[ "$output" == *"app/org.x.Y/x86_64/stable"*"2"*"network"* ]]
     [[ "$output" == *"nudge · failure report"* ]]
     run "$NUDGE" --failures --json
     [[ "$output" == *'"attempts":2'* ]]
@@ -550,7 +550,7 @@ EOT
     [[ "$(wc -l < "$FLATPAK_CALLS")" -eq 1 ]]
     [[ "$output" == *"nothing else was changed."* ]]
     [[ "$output" == *"the error output is at"* ]]
-    ls "$XDG_DATA_HOME"/nudge/logs/upgrade-*-flatpak-1.log >/dev/null
+    ls "$XDG_DATA_HOME"/nudge/logs/upgrade-*-flatpak-1.*.log >/dev/null
     grep -q 'flatpak:failed (1/1)' "$XDG_DATA_HOME/nudge/history.jsonl"
     run ! grep -q 'attempts: ' "$XDG_DATA_HOME/nudge/history.jsonl"
     run ! grep -q 'Show Report' "$_INTEGRATION_TMPDIR/kdialog.log"
