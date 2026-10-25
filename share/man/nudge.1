@@ -27,7 +27,9 @@ whether to try the failed ones again. Every failed attempt is counted per
 update, across sessions; once the same update has failed
 \fBRETRY_REPORT_AFTER\fR times a failure report is written with the cause,
 the lines the package manager printed and the commands that might resolve it.
-nudge never runs those commands itself.
+nudge never runs those commands itself. The messages it recognises are the
+English ones; in another language the cause reads as unknown and the lines
+are quoted as they are.
 .PP
 nudge supports multiple package managers (apt, dnf, pacman, zypper),
 Flatpak and Snap integration, multiple notification backends

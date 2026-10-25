@@ -255,6 +255,7 @@ Functions use `lower_snake_case`. Module functions are prefixed with the module 
 | `schedule.sh` | `schedule_`, `parse_` | `schedule_due`, `parse_duration` |
 | `history.sh` | `history_` | `history_write`, `history_show` |
 | `safety.sh` | `safety_` | `safety_reboot_check`, `safety_snapshot` |
+| `retry.sh` | `retry_`, `_retry_` | `retry_diagnose`, `retry_report_save` |
 | `selfupdate.sh` | `selfupdate_`, `version_` | `selfupdate_check`, `version_gt` |
 | `tui.sh` | `_tui_` | `_tui_init`, `_tui_bunny`, `_tui_menu` |
 | `bunny-poses.sh` | `bunny_pose`, `_bunny_pose_` | `bunny_pose`, `_bunny_pose_sitting` |
@@ -420,7 +421,7 @@ source "$NUDGE_LIB_DIR/dialog.sh"           # 18. Depends on notify, retry, the 
 | `PKG_UPDATE_LIST` | `pkgmgr.sh` | `pkgmgr_list_updates()` | Preview, JSON |
 | `_UPG_*` (the session's result, including `_UPG_ATTEMPTS`, `_UPG_REPORT`, `_UPG_CAUSE`, `_UPG_FAILS`, `_UPG_CULPRITS`) | `pkgmgr.sh` | `_pkgmgr_read_status()` | Dispatcher, `dialog.sh` |
 | `_RETRY_F_*` (the session's failures per list) | `retry.sh` | `retry_record_failure()` | The runner, `retry_report_text()` |
-| `RETRY_LEDGER_FILE`, `RETRY_REPORT_DIR`, `RETRY_LOG_DIR` | `retry.sh` | Module load | The ledger, report and capture functions |
+| `RETRY_LEDGER_FILE`, `RETRY_REPORT_DIR`, `RETRY_LOG_DIR`, `RETRY_REPORT_MAX`, `RETRY_LOG_MAX` | `retry.sh` | Module load | The ledger, report and capture functions |
 | `NOTIFY_BACKEND` | `notify.sh` | `notify_detect()` | All notify functions |
 | `NOTIFY_RESPONSE` | `notify.sh` | `notify_prompt()` | Dispatcher |
 | `HISTORY_FILE` | `history.sh` | Module load | `history_write()`, `history_show()` |

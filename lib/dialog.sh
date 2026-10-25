@@ -694,12 +694,10 @@ dialog_show_report() {
         [[ -f "$report" && ! -L "$report" ]] || return 1
     fi
     tool=$(_dialog_tool) || return 1
-    local -a wrap=()
-    local dismiss="${AUTO_DISMISS:-0}"
-    [[ "$dismiss" =~ ^[0-9]+$ && "$dismiss" -gt 0 ]] && wrap=(timeout "$dismiss")
+    # the user asked for this box: AUTO_DISMISS does not close it under them
     case "$tool" in
-        kdialog) "${wrap[@]}" kdialog --icon "$(_dialog_icon)" --title "nudge · failure report" --textbox "$report" 720 560 >/dev/null 2>&1 || true ;;
-        zenity)  "${wrap[@]}" zenity --text-info --title="nudge · failure report" --filename="$report" --font="monospace" --width=720 --height=560 >/dev/null 2>&1 || true ;;
+        kdialog) kdialog --icon "$(_dialog_icon)" --title "nudge · failure report" --textbox "$report" 720 560 >/dev/null 2>&1 || true ;;
+        zenity)  zenity --text-info --title="nudge · failure report" --filename="$report" --font="monospace" --width=720 --height=560 >/dev/null 2>&1 || true ;;
     esac
     return 0
 }

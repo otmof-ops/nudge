@@ -616,8 +616,8 @@ _failing_system_step() {
     local n
     n=$(grep -c '^system$' "$TMPDIR_TEST/calls")
     if [[ "$n" -le "${FAIL_TIMES:-99}" ]]; then
-        echo "E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 4321 (apt-get)" >> "$_RUNNER_STEP_LOG"
-        _RUNNER_LAST_RC=100
+        echo "${FAIL_LINE:-E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 4321 (apt-get)}" >> "$_RUNNER_STEP_LOG"
+        _RUNNER_LAST_RC="${FAIL_RC:-100}"
         _runner_status_write system failed
         return 1
     fi
@@ -637,6 +637,51 @@ _ok_flatpak_step() { echo "flatpak" >> "$TMPDIR_TEST/calls"; _runner_status_writ
     run _runner_exec_argv bash -c 'echo plain >&2; exit 3'
     [[ "$status" -eq 3 ]]
     [[ "$output" == "plain" ]]
+}
+
+@test "each command of a step starts its capture afresh" {
+    _RUNNER_STEP_LOG="$TMPDIR_TEST/capture.log"
+    : > "$_RUNNER_STEP_LOG"
+    _runner_exec_argv bash -c 'echo first >&2' >/dev/null 2>&1
+    run _runner_exec_argv bash -c 'echo second >&2; exit 3'
+    [[ "$status" -eq 3 ]]
+    [[ "$(cat "$TMPDIR_TEST/capture.log")" == "second" ]]
+}
+
+@test "a rejected update command fails the step in nudge, counts against nothing, and gets no retry question" {
+    _retry_runner_setup
+    source "$PROJECT_DIR/lib/config.sh"
+    UPDATE_COMMAND="rm -rf /"
+    _runner_apply_flatpak() { _ok_flatpak_step; }
+    _runner_apply_snap() { _runner_status_write snap skipped; return 0; }
+    _runner_ask_retry() { echo "asked" >> "$TMPDIR_TEST/calls"; return 0; }
+    run _runner_apply_all
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"The update command was rejected"* ]]
+    [[ "$output" == *"exit 1 · the update command in nudge.conf was rejected"* ]]
+    run ! grep -q '^asked$' "$TMPDIR_TEST/calls"
+    grep -qx 'cause_system=config' "$_RUNNER_STATUS"
+    [[ -z "$(retry_ledger_rows)" ]]
+}
+
+@test "sudo refusing the account ends the attempts; a mistyped password gets another go" {
+    _retry_runner_setup
+    FAIL_TIMES=99 FAIL_LINE="jay is not in the sudoers file." FAIL_RC=1
+    _runner_apply_system() { _failing_system_step; }
+    _runner_apply_flatpak() { _ok_flatpak_step; }
+    _runner_apply_snap() { _runner_status_write snap skipped; return 0; }
+    _runner_ask_retry() { echo "asked" >> "$TMPDIR_TEST/calls"; return 0; }
+    run _runner_apply_all
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"sudo would not allow it"* ]]
+    run ! grep -q '^asked$' "$TMPDIR_TEST/calls"
+    : > "$TMPDIR_TEST/calls"; : > "$_RUNNER_STATUS"
+    FAIL_TIMES=1 FAIL_LINE="Sorry, try again." FAIL_RC=1
+    run _runner_apply_all
+    [[ "$status" -eq 0 ]]
+    grep -q '^asked$' "$TMPDIR_TEST/calls"
+    [[ "$(grep -c '^system$' "$TMPDIR_TEST/calls")" -eq 2 ]]
+    [[ -z "$(retry_ledger_rows)" ]]
 }
 
 @test "_runner_run_step records the exit code the command gave" {

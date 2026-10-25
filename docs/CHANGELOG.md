@@ -27,11 +27,16 @@ happening.
   install script failed (the package is named), packages that do not fit
   together, a file conflict on Arch, a snap that is still running (named),
   snapd busy, a refresh on hold, a Flatpak remote that cannot be reached, a
-  Flatpak app that wants a newer Flatpak, a no at the package manager's own
-  question (apt's "Abort." goes to stdout, so it is read from the exit code
-  and an error-free capture), or the command interrupted. Neither of the
-  last two counts against the update. Anything else is reported in the
-  package manager's own words. The recognised messages were checked against
+  Flatpak app that wants a newer Flatpak, snapd not running, a rejected
+  `UPDATE_COMMAND`, a no at the package manager's own question (apt's
+  "Abort." goes to stdout, so it is read from the exit code and a capture
+  with no `E:` line), or the command interrupted. A no, a Ctrl-C, sudo
+  refusing or a rejected command count against no update and get no retry
+  question. The messages recognised are the English ones; in another
+  language the cause reads as unknown and the lines are quoted as they are.
+  Each command of a step starts its capture afresh, so what an earlier,
+  successful command warned about is never read as the reason the next one
+  failed. Anything else is reported in the package manager's own words. The recognised messages were checked against
   apt, dpkg, snapd, flatpak and sudo as installed, and the lock, the
   certificate warning and the abort against a real apt run; dnf, pacman and
   zypper follow their documented wording.
@@ -51,7 +56,9 @@ happening.
   passive backends say where it is). nudge never runs a remedy itself.
 - `nudge --failures` (the ledger and the latest report), `--failures --json`,
   `--failures --clear` (forgets the ledger, the reports and the captured
-  output). The newest 20 reports and 30 captures are kept.
+  output). The newest 20 reports and 30 captures are kept; the capture of an
+  attempt that went through on the next try is deleted. A ledger that cannot
+  be written is a warning, never the end of the session.
 - The JSON output carries `attempts` and `failure_report`; the history row's
   detail names the attempts and the report; the session status file carries
   `attempts`, `retry_declined`, `report` and per list `cause_*`, `fails_*`

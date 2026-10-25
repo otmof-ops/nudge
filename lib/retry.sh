@@ -79,7 +79,11 @@ _retry_has() {
     grep -qiE -- "$1" <<< "$_RETRY_TEXT"
 }
 
-# The lines that matched, cleaned and cut, at most <n>
+# The lines that matched, cleaned and cut, at most <n>. They are the package
+# manager's own words, exactly as the terminal already showed them (apt strips
+# a user:password from a URI itself); they stay in a 0600 file and are never
+# sent anywhere. attacker: assumes the manager's stderr is as safe to keep as
+# it was to display; the names pulled out of it are validated separately.
 _retry_lines() {
     local pat="$1" n="${2:-3}" line out="" count=0
     [[ -n "$_RETRY_TEXT" ]] || return 0
@@ -107,7 +111,8 @@ _retry_names() {
         [[ $'\n'"$out" == *$'\n'"$name"$'\n'* ]] && continue
         out+="${name}"$'\n'
     done < <(grep -iE -- "$pat" <<< "$_RETRY_TEXT" | head -20 || true)
-    printf '%s' "${out%$'\n'}"
+    # one name per line, the last one terminated too, so a while-read loop sees it
+    printf '%s' "$out"
 }
 
 # A package name out of a file name: foo-1.2-3.fc40.x86_64 or foo_1.2_amd64.deb or foo-1.0-1-x86_64.pkg.tar.zst
@@ -149,16 +154,9 @@ retry_diagnose() {
         _retry_set interrupted 'Interrupt|SIGINT|\^C|Terminated'
         return 0
     fi
-    # The user answered no to the package manager's own question. The "Abort."
-    # goes to stdout, which is not captured; what is captured then has no error
-    # line at all, and apt, dnf and pacman exit 1 (apt's errors are 100).
-    if _retry_has '^Abort\.$|^Operation aborted\.$|^Operation canceled\.$|^Aborting\.?$|Exiting on user command'; then
-        _retry_set declined 'Abort|aborted|canceled|Exiting on user command'
-        return 0
-    fi
-    if [[ "$list" == "system" && "$rc" -eq 1 && "$pkgmgr" =~ ^(apt|dnf|pacman)$ && -n "$log" && -f "$log" ]] \
-       && ! _retry_has '^E: |^(error|Error|ERROR):|^Error$|^fatal|Sorry, try again|incorrect password|sudoers|not allowed to execute'; then
-        _retry_set declined 'Abort|aborted|canceled'
+    # The runner refused the configured command before anything ran
+    if _retry_has '^E: nudge: (the update command was rejected|no upgrade command)'; then
+        _retry_set config '^E: nudge:'
         return 0
     fi
     # sudo said no before anything ran
@@ -233,8 +231,25 @@ retry_diagnose() {
         _retry_set index-corrupt 'mismatch|not valid yet|expired|isn.t valid|Splitting|corrupted|Checksum'
         return 0
     fi
-    # The mirror no longer has it
-    if _retry_has '404|Not Found|Unable to fetch some archives|failed retrieving file .* from'; then
+    # A repository that cannot be reached, or is gone
+    if _retry_has "Failed to download metadata for repo|Repository '[^']+' is invalid|Problem retrieving|Could not refresh|Valid metadata not found|No remote refs found|Unable to load summary|Error updating remote metadata|Failed to update remote metadata|Timeout exceeded when accessing"; then
+        _retry_set repo-unreachable 'metadata|Repository|Problem retrieving|refresh|remote refs|summary|Timeout'
+        _RETRY_CULPRITS=$(_retry_names "(for repo|Repository) '([A-Za-z0-9._:-]+)'" 2)
+        [[ -z "$_RETRY_CULPRITS" ]] && _RETRY_CULPRITS=$(_retry_names '(for|from) remote ([A-Za-z0-9._-]+)' 2)
+        return 0
+    fi
+    # snapd itself is not there to talk to
+    if [[ "$list" == "snap" ]] && _retry_has 'dial unix .*snapd\.socket|cannot connect to snapd|snapd\.socket: connect'; then
+        _retry_set snapd-down 'snapd|socket'
+        return 0
+    fi
+    # The network itself (before the mirror: a download that never started is not a stale index)
+    if _retry_has 'Temporary failure resolving|Could not resolve|Could not connect to|Connection failed|Connection timed out|Connection refused|Unable to connect to|Network is unreachable|cannot communicate with server|persistent network error|cannot download|Could not resolve host|Failed to connect|Timeout was reached|network timeout|download library error|Couldn.t connect|Could not reach'; then
+        _retry_set network 'resolv|connect|Connection|unreachable|communicate|network|download|Timeout|reach'
+        return 0
+    fi
+    # The mirror no longer has it: an HTTP 404, or apt's "unable to fetch" with the network fine
+    if _retry_has '[^A-Za-z0-9]404 +Not Found|returned error: 404|Unable to fetch some archives'; then
         _retry_set mirror-stale '404|Not Found|Unable to fetch|failed retrieving file'
         local files f
         files=$(_retry_names 'Failed to fetch [^ ]*/([^ /]+\.deb)')
@@ -247,18 +262,6 @@ retry_diagnose() {
             done <<< "$files"
             _RETRY_CULPRITS="${_RETRY_CULPRITS%$'\n'}"
         fi
-        return 0
-    fi
-    # A repository that cannot be reached, or is gone
-    if _retry_has "Failed to download metadata for repo|Repository '[^']+' is invalid|Problem retrieving|Could not refresh|Valid metadata not found|No remote refs found|Unable to load summary|Error updating remote metadata|Failed to update remote metadata|Timeout exceeded when accessing"; then
-        _retry_set repo-unreachable 'metadata|Repository|Problem retrieving|refresh|remote refs|summary|Timeout'
-        _RETRY_CULPRITS=$(_retry_names "(for repo|Repository) '([A-Za-z0-9._:-]+)'" 2)
-        [[ -z "$_RETRY_CULPRITS" ]] && _RETRY_CULPRITS=$(_retry_names '(for|from) remote ([A-Za-z0-9._-]+)' 2)
-        return 0
-    fi
-    # The network itself
-    if _retry_has 'Temporary failure resolving|Could not resolve|Could not connect to|Connection failed|Connection timed out|Connection refused|Unable to connect to|Network is unreachable|cannot communicate with server|persistent network error|cannot download|Could not resolve host|Failed to connect|Timeout was reached|network timeout|download library error|Couldn.t connect|Could not reach'; then
-        _retry_set network 'resolv|connect|Connection|unreachable|communicate|network|download|Timeout|reach'
         return 0
     fi
     case "$list" in
@@ -347,6 +350,24 @@ retry_diagnose() {
             esac
             ;;
     esac
+    # The user answered no to the package manager's own question. apt's "Abort."
+    # goes to stdout, which is not captured, and apt exits 1 where its errors
+    # exit 100 with an "E: " line (the prefix is the same in every language);
+    # dnf and pacman exit 1 too, with nothing on stderr at all.
+    if _retry_has '^Abort\.$|^Operation aborted\.$|^Operation canceled\.$|^Aborting\.?$|Exiting on user command'; then
+        _retry_set declined 'Abort|aborted|canceled|Exiting on user command'
+        return 0
+    fi
+    if [[ "$list" == "system" && "$rc" -eq 1 && -n "$log" && -f "$log" ]]; then
+        if [[ "$pkgmgr" == "apt" ]] && ! _retry_has '^E: '; then
+            _retry_set declined 'Abort|aborted'
+            return 0
+        fi
+        if [[ "$pkgmgr" =~ ^(dnf|pacman)$ && -z "${_RETRY_TEXT//[[:space:]]/}" ]]; then
+            _retry_set declined 'Abort|aborted'
+            return 0
+        fi
+    fi
     # Nobody recognised it: keep the first error lines as the evidence
     _retry_set unknown '^(E|W):|^error:|^Error|^fatal|failed|cannot|unable|denied'
     return 0
@@ -364,6 +385,8 @@ retry_cause_headline() {
     case "$cause" in
         interrupted)     printf 'the command was interrupted before it finished' ;;
         declined)        printf 'you answered no when the package manager asked' ;;
+        config)          printf 'the update command in nudge.conf was rejected before anything ran' ;;
+        snapd-down)      printf 'snapd is not running' ;;
         repo-tls)
             if [[ -n "$first" ]]; then printf 'the certificate of the repository at %s could not be verified' "$first"
             else printf 'a repository'"'"'s certificate could not be verified'; fi ;;
@@ -416,6 +439,8 @@ retry_cause_explain() {
     case "$cause" in
         interrupted)      printf 'It was stopped (Ctrl-C, or the window closed). Nothing else is needed.' ;;
         declined)         printf 'Nothing was changed. The package manager asks before it installs; a no there ends the step.' ;;
+        config)           printf 'UPDATE_COMMAND is a plain package-manager command line, nothing more; nudge --validate says what it objects to.' ;;
+        snapd-down)       printf 'Every snap refresh goes through the snapd service, and there was nobody at its socket.' ;;
         repo-tls)         printf 'Its certificate is wrong, expired, or for another name, or something between you and it is rewriting TLS. The other repositories are fine.' ;;
         sudo-denied)      printf 'The system updates run as root through sudo, and sudo refused this account. Nothing was changed.' ;;
         sudo-password)    printf 'The step never started; nothing was changed.' ;;
@@ -454,6 +479,12 @@ retry_cause_remedy() {
             echo 'run nudge again when you are ready' ;;
         declined)
             echo 'run nudge again and answer yes when the package manager asks' ;;
+        config)
+            echo '$ nudge --validate'
+            echo 'fix UPDATE_COMMAND in ~/.config/nudge/nudge.conf, or remove the line to get the default back' ;;
+        snapd-down)
+            echo '$ systemctl status snapd'
+            echo '$ sudo systemctl start snapd' ;;
         repo-tls)
             case "$pkgmgr" in
                 apt)    echo "find the repository: grep -r \"${first:-<host>}\" /etc/apt/sources.list /etc/apt/sources.list.d/"
@@ -687,7 +718,7 @@ _retry_ledger_replace() {
     fi
     local tmp
     tmp=$(umask 077 && mktemp "${RETRY_LEDGER_FILE}.XXXXXX") || return 1
-    cat > "$tmp"
+    cat > "$tmp" || { rm -f "$tmp"; return 1; }
     mv -f "$tmp" "$RETRY_LEDGER_FILE" || { rm -f "$tmp"; return 1; }
 }
 
@@ -813,6 +844,8 @@ retry_log_path() {
     ts=$(date '+%Y%m%d-%H%M%S' 2>/dev/null || echo now)
     local f="${RETRY_LOG_DIR}/upgrade-${ts}-${list}-${attempt}.log"
     ( umask 077; : > "$f" ) 2>/dev/null || return 1
+    # the newest RETRY_LOG_MAX stay, this one among them
+    _retry_rotate "$RETRY_LOG_DIR" 'upgrade-*.log' "$RETRY_LOG_MAX"
     printf '%s' "$f"
 }
 
@@ -848,12 +881,14 @@ retry_record_failure() {
     fi
     local -a counted=("${blamed[@]}")
     [[ "${#counted[@]}" -eq 0 ]] && counted=("${selected[@]}")
-    case "$_RETRY_CAUSE" in
-        interrupted|declined) ;;   # the user stopped it, or said no: not a failure of the update
-        *) if [[ "${#counted[@]}" -gt 0 ]]; then printf '%s\n' "${counted[@]}" | retry_ledger_bump "$list" "$_RETRY_CAUSE"; fi ;;
-    esac
-    local max since
-    read -r max since <<< "$(printf '%s\n' "${counted[@]}" | retry_ledger_max "$list")"
+    # Counted against the names only when the update itself failed; a ledger
+    # that cannot be written is a warning, never the end of the session
+    local max=0 since=""
+    if retry_cause_counts "$_RETRY_CAUSE" && [[ "${#counted[@]}" -gt 0 ]]; then
+        printf '%s\n' "${counted[@]}" | retry_ledger_bump "$list" "$_RETRY_CAUSE" \
+            || log_warn "The failure ledger could not be written: $RETRY_LEDGER_FILE"
+        read -r max since <<< "$(printf '%s\n' "${counted[@]}" | retry_ledger_max "$list")"
+    fi
     _RETRY_F_CAUSE["$list"]="$_RETRY_CAUSE"
     _RETRY_F_RC["$list"]="$rc"
     _RETRY_F_LOG["$list"]="$log"
@@ -875,7 +910,10 @@ retry_record_failure() {
 retry_record_success() {
     local list="$1"
     shift
-    retry_ledger_forgive "$list" < <(printf '%s\n' "$@")
+    retry_ledger_forgive "$list" < <(printf '%s\n' "$@") \
+        || log_warn "The failure ledger could not be written: $RETRY_LEDGER_FILE"
+    # the capture of the attempt before this one is of no use now
+    [[ -n "${_RETRY_F_LOG[$list]:-}" ]] && rm -f "${_RETRY_F_LOG[$list]}" 2>/dev/null
     unset "_RETRY_F_CAUSE[$list]" "_RETRY_F_RC[$list]" "_RETRY_F_LOG[$list]" "_RETRY_F_CULPRITS[$list]" \
           "_RETRY_F_EVIDENCE[$list]" "_RETRY_F_ATTEMPTS[$list]" "_RETRY_F_STREAK[$list]" "_RETRY_F_SINCE[$list]" "_RETRY_F_COUNT[$list]"
     return 0
@@ -902,11 +940,23 @@ retry_report_due() {
     return 1
 }
 
-# The names as the headline and the remedy want them, as arguments
-_retry_f_names() {
-    local list="$1"
-    # shellcheck disable=SC2086  # the names are space-separated and validated
-    printf '%s\n' ${_RETRY_F_CULPRITS[$list]:-}
+# 0 when a cause is the update's own failure, counted against it in the ledger;
+# the user stopping it or saying no, sudo refusing, or a rejected command are not
+retry_cause_counts() {
+    case "${1:-}" in
+        interrupted|declined|sudo-denied|sudo-password|sudo-no-tty|config) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+# 0 when another attempt could go through on its own: not after a no, a
+# Ctrl-C, sudo refusing the account, or a rejected command (a mistyped
+# password is worth another go)
+retry_cause_retriable() {
+    case "${1:-}" in
+        interrupted|declined|sudo-denied|sudo-no-tty|config) return 1 ;;
+        *) return 0 ;;
+    esac
 }
 
 # "2026-10-24 19:40" from an ISO timestamp
@@ -917,7 +967,7 @@ _retry_when() {
 }
 
 # "~/..." for the user's own paths
-_retry_tilde() {
+retry_tilde() {
     local p="${1:-}"
     [[ -n "${HOME:-}" && "$p" == "$HOME"/* ]] && p="~${p#"$HOME"}"
     printf '%s' "$p"
@@ -945,7 +995,7 @@ retry_report_text() {
         local cause="${_RETRY_F_CAUSE[$list]}" title="${_RETRY_LIST_TITLE[$list]}"
         [[ "$list" == "system" && -n "$pkgmgr" ]] && title+=" (${pkgmgr})"
         local -a names=()
-        mapfile -t names < <(_retry_f_names "$list")
+        read -ra names <<< "${_RETRY_F_CULPRITS[$list]:-}"
         out+="${nl}"
         out+="── ${title} ──${nl}"
         out+="status:   failed · exit ${_RETRY_F_RC[$list]:-?} · ${_RETRY_F_ATTEMPTS[$list]:-1} attempt"
@@ -983,10 +1033,9 @@ retry_report_text() {
         while IFS= read -r step; do
             [[ -z "$step" ]] && continue
             i=$((i + 1))
-            if [[ "$step" == '$ '* ]]; then out+="    ${i}. ${step}${nl}"
-            else out+="    ${i}. ${step}${nl}"; fi
+            out+="    ${i}. ${step}${nl}"
         done < <(retry_cause_remedy "$cause" "$pkgmgr" "$list" "${names[@]}")
-        [[ -n "${_RETRY_F_LOG[$list]:-}" ]] && out+="log:      $(_retry_tilde "${_RETRY_F_LOG[$list]}")${nl}"
+        [[ -n "${_RETRY_F_LOG[$list]:-}" ]] && out+="log:      $(retry_tilde "${_RETRY_F_LOG[$list]}")${nl}"
     done
     out+="${nl}"
     out+="When it goes through, nudge forgets it. Every update that keeps failing: nudge --failures${nl}"
@@ -1002,7 +1051,7 @@ retry_report_save() {
     local tmp
     tmp=$(umask 077 && mktemp "${f}.XXXXXX") || return 1
     retry_report_text "$@" > "$tmp" || { rm -f "$tmp"; return 1; }
-    { printf '\n'; printf 'this report: %s\n' "$(_retry_tilde "$f")"; } >> "$tmp"
+    { printf '\n'; printf 'this report: %s\n' "$(retry_tilde "$f")"; } >> "$tmp"
     mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
     _retry_rotate "$RETRY_REPORT_DIR" 'failure-*.txt' "$RETRY_REPORT_MAX"
     _retry_rotate "$RETRY_LOG_DIR" 'upgrade-*.log' "$RETRY_LOG_MAX"
@@ -1053,7 +1102,7 @@ retry_failures_show() {
     fi
     if [[ -z "$rows" ]]; then
         echo "Nothing is failing: every update nudge tried went through, or none has been tried yet."
-        [[ -n "$latest" ]] && echo "The last report is still here: $(_retry_tilde "$latest")"
+        [[ -n "$latest" ]] && echo "The last report is still here: $(retry_tilde "$latest")"
         return 0
     fi
     printf '%-8s  %-36s  %-8s  %-16s  %-16s  %s\n' "LIST" "UPDATE" "FAILED" "FIRST" "LAST" "CAUSE"

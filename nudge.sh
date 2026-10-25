@@ -674,6 +674,7 @@ case "$NOTIFY_RESPONSE" in
         elif [[ "${_UPG_ATTEMPTS:-1}" -gt 1 ]]; then
             _UPG_DETAIL+="; attempts: ${_UPG_ATTEMPTS}"
         fi
+        [[ "${_UPG_RETRY_DECLINED:-0}" == "1" ]] && _UPG_DETAIL+="; retry declined"
 
         if [[ "$_UPGRADE_RC" -eq 2 ]]; then
             log_info "User cancelled at the selection menu"

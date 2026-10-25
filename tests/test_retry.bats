@@ -165,6 +165,90 @@ _captured() {
     [[ "${_RETRY_F_CULPRITS[system]}" == "repo.nordvpn.com" ]]
 }
 
+@test "no network comes before a stale mirror; 404 is a status, not a name" {
+    retry_diagnose system apt 100 "$(_captured a "E: Failed to fetch http://archive.ubuntu.com/ubuntu/pool/main/v/vim/vim_9.1_amd64.deb  Temporary failure resolving 'archive.ubuntu.com'" "E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?")"
+    [[ "$_RETRY_CAUSE" == "network" ]]
+    retry_diagnose system apt 100 "$(_captured b "E: Failed to fetch http://archive.ubuntu.com/ubuntu/pool/main/v/vim/vim_9.1_amd64.deb  404  Not Found [IP: 1.2.3.4 80]" "E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?")"
+    [[ "$_RETRY_CAUSE" == "mirror-stale" && "$_RETRY_CULPRITS" == "vim" ]]
+    retry_diagnose system pacman 1 "$(_captured c "error: failed retrieving file 'core.db' from mirror.example.org : Could not resolve host: mirror.example.org")"
+    [[ "$_RETRY_CAUSE" == "network" ]]
+    retry_diagnose system apt 100 "$(_captured d "E: Unable to locate package libfoo404")"
+    [[ "$_RETRY_CAUSE" == "unknown" ]]
+}
+
+@test "every blamed name is kept, the last one too" {
+    retry_diagnose system apt 100 "$(_captured a "dpkg: error processing archive /var/cache/apt/archives/foo_1.0_amd64.deb (--unpack):" " trying to overwrite '/usr/bin/x', which is also in package bar 2.0" "dpkg: error processing archive /var/cache/apt/archives/baz_3.0_amd64.deb (--unpack):" "E: Sub-process /usr/bin/dpkg returned an error code (1)")"
+    [[ "$_RETRY_CAUSE" == "package-script" ]]
+    [[ "$_RETRY_CULPRITS" == "bar" ]]
+    retry_diagnose system apt 100 "$(_captured b "dpkg: error processing archive /var/cache/apt/archives/foo_1.0_amd64.deb (--unpack):" " cannot copy extracted data" "dpkg: error processing archive /var/cache/apt/archives/baz_3.0_amd64.deb (--unpack):" " cannot copy extracted data" "E: Sub-process /usr/bin/dpkg returned an error code (1)")"
+    [[ "$_RETRY_CULPRITS" == $'foo\nbaz' ]]
+}
+
+@test "snapd not running, a rejected update command, and the user's own no are their own causes" {
+    retry_diagnose snap apt 1 "$(_captured a 'error: cannot communicate with server: Get "http://localhost/v2/snaps": dial unix /run/snapd.socket: connect: no such file or directory')"
+    [[ "$_RETRY_CAUSE" == "snapd-down" ]]
+    [[ "$(retry_cause_remedy snapd-down apt snap)" == *"systemctl start snapd"* ]]
+    retry_diagnose system apt 1 "$(_captured b "E: nudge: the update command was rejected: 'rm' is not a known package tool")"
+    [[ "$_RETRY_CAUSE" == "config" ]]
+    run ! retry_cause_retriable config
+    run ! retry_cause_counts config
+    retry_cause_retriable sudo-password
+    run ! retry_cause_counts sudo-password
+    retry_cause_retriable lock
+    retry_cause_counts lock
+    # apt's no: exit 1 and no E: line; dnf's and pacman's: exit 1 and nothing captured at all
+    retry_diagnose system dnf 1 "$(_captured c "")"
+    [[ "$_RETRY_CAUSE" == "declined" ]]
+    retry_diagnose system dnf 1 "$(_captured d "some words, no error")"
+    [[ "$_RETRY_CAUSE" == "unknown" ]]
+    retry_diagnose system apt 1 "$(_captured e "E: something")"
+    [[ "$_RETRY_CAUSE" == "unknown" ]]
+    retry_diagnose system apt 1 "$(_captured f "sudo: a terminal is required to read the password")"
+    [[ "$_RETRY_CAUSE" == "sudo-no-tty" ]]
+}
+
+@test "a mistyped password, a Ctrl-C and a rejected command are not held against the update" {
+    retry_record_failure system apt 1 "$(_captured a "Sorry, try again." "sudo: 3 incorrect password attempts")" 1 vim openssl
+    [[ ! -f "$RETRY_LEDGER_FILE" ]]
+    [[ "${_RETRY_F_STREAK[system]}" -eq 0 ]]
+    printf 'system\tvim\t2\t2026-10-23T09:00:00+08:00\t2026-10-24T09:00:00+08:00\tlock\n' > "$RETRY_LEDGER_FILE"
+    retry_record_failure system apt 130 "$(_captured b "^C")" 1 vim
+    [[ "${_RETRY_F_STREAK[system]}" -eq 0 ]]
+    run ! retry_report_due
+    retry_record_failure system apt 1 "$(_captured c "E: nudge: the update command was rejected: bad")" 1 vim
+    [[ "${_RETRY_F_CAUSE[system]}" == "config" && "${_RETRY_F_STREAK[system]}" -eq 0 ]]
+    [[ "$(awk -F'\t' '$2 == "vim" {print $3}' "$RETRY_LEDGER_FILE")" == "2" ]]
+}
+
+@test "a ledger that cannot be written is a warning, not the end of the session" {
+    _warned=""
+    log_warn() { _warned="$*"; }
+    printf 'system\tvim\t1\t2026-10-23T09:00:00+08:00\t2026-10-24T09:00:00+08:00\tlock\n' > "$RETRY_LEDGER_FILE"
+    local log
+    log=$(_captured a "E: Could not get lock x")
+    chmod 500 "$NUDGE_STATE_DIR"
+    retry_record_failure system apt 100 "$log" 1 vim
+    [[ "${_RETRY_F_CAUSE[system]}" == "lock" ]]
+    [[ "$_warned" == *"ledger could not be written"* ]]
+    _warned=""
+    retry_record_success system vim
+    [[ "$_warned" == *"ledger could not be written"* ]]
+    chmod 700 "$NUDGE_STATE_DIR"
+}
+
+@test "the capture of an attempt that went through on the next try is deleted, and logs rotate as they are made" {
+    local log
+    log=$(retry_log_path system 1)
+    echo "E: Could not get lock x" > "$log"
+    retry_record_failure system apt 100 "$log" 1 vim
+    retry_record_success system vim
+    [[ ! -e "$log" ]]
+    RETRY_LOG_MAX=2
+    local l1 l2 l3
+    l1=$(retry_log_path system 1); sleep 1; l2=$(retry_log_path system 2); sleep 1; l3=$(retry_log_path system 3)
+    [[ ! -e "$l1" && -e "$l2" && -e "$l3" ]]
+}
+
 @test "colour codes and control characters are stripped before the output is read" {
     retry_diagnose system apt 100 "$(_captured a $'\e[31mE: Could not get lock /var/lib/dpkg/lock-frontend\e[0m. It is held by process 77 (apt)\r')"
     [[ "$_RETRY_CAUSE" == "lock" ]]
@@ -284,6 +368,7 @@ _captured() {
     [[ "$text" == *"log:      "*"a.log"* ]]
     [[ "$text" == *"nudge does not run these commands for you"* ]]
     [[ "$text" != *"── Flatpak ──"* ]]
+    [[ "$text" != *"named:"* ]]
 }
 
 @test "the report is saved privately in the reports directory, the newest is found, old ones are rotated" {
@@ -349,7 +434,7 @@ _captured() {
 
 @test "every cause has a headline, an explanation and at least one step, for every manager" {
     local cause mgr list
-    for cause in interrupted declined repo-tls sudo-denied sudo-password sudo-no-tty lock dpkg-interrupted disk-full repo-key index-corrupt mirror-stale repo-unreachable network package-script deps-broken file-conflict snap-running snap-busy snap-held snap-denied snap-app flatpak-old flatpak-auth flatpak-app unknown; do
+    for cause in interrupted declined repo-tls config snapd-down sudo-denied sudo-password sudo-no-tty lock dpkg-interrupted disk-full repo-key index-corrupt mirror-stale repo-unreachable network package-script deps-broken file-conflict snap-running snap-busy snap-held snap-denied snap-app flatpak-old flatpak-auth flatpak-app unknown; do
         for mgr in apt dnf pacman zypper; do
             for list in system flatpak snap; do
                 [[ -n "$(retry_cause_headline "$cause" "$mgr" "$list")" ]]
