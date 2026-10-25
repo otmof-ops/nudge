@@ -399,3 +399,62 @@ EOF
     run ! dialog_reboot_ask
     grep -qx -- '--yesno' "$TIMEOUT_ARGS"
 }
+
+# --- When the same updates keep failing (2.3.0) ---
+
+_failure_state() {
+    declare -gA _UPG_CAUSE=([system]="lock" [snap]="snap-running")
+    declare -gA _UPG_FAILS=([system]="3" [snap]="1")
+    declare -gA _UPG_CULPRITS=([system]="4321" [snap]="firefox")
+    _UPG_ATTEMPTS=2
+}
+
+@test "the failure dialog names each failed list, its cause and how often, with the mascot" {
+    source "$PROJECT_DIR/lib/retry.sh"
+    _failure_state
+    run dialog_failure_html "it's not you" teary
+    [[ "$output" == *"Some updates didn&#8217;t go through"* ]]
+    [[ "$output" == *"2 attempts this session"* ]]
+    [[ "$output" == *"System packages (apt)"*"failed 3 times"* ]]
+    [[ "$output" == *"another package manager is running (pid 4321)"* ]]
+    [[ "$output" == *"Snaps"* && "$output" == *"firefox is still running"* ]]
+    [[ "$output" != *"failed 1 times"* ]]
+    [[ "$output" == *"&#8220;it&#39;s not you&#8221;"* || "$output" == *"&#8220;it's not you&#8221;"* ]]
+    [[ "$output" == *'<img src="'*'bunny.svg"'* ]]
+    [[ "$output" == *"does not run those commands"* ]]
+    run dialog_failure_pango "quote"
+    [[ "$output" == *'weight="bold">Some updates'* ]]
+    [[ "$output" == *"pid 4321"* ]]
+}
+
+@test "the failure dialog escapes what it shows and falls back to the cause id without lib/retry.sh" {
+    _failure_state
+    _UPG_CULPRITS[system]='a<b'
+    run dialog_failure_html "" normal
+    [[ "$output" == *"lock"* ]]
+    [[ "$output" != *"a<b"* ]]
+}
+
+@test "dialog_failure_ask offers Show Report and Close; the report box opens only a report of ours" {
+    source "$PROJECT_DIR/lib/retry.sh"
+    _failure_state
+    _mock_kdialog "" 0
+    PATH="$MOCK_BIN:$PATH"
+    dialog_failure_ask "quote" teary
+    grep -q -- '--yes-label' "$KDIALOG_ARGS"
+    grep -qx 'Show Report' "$KDIALOG_ARGS"
+    grep -qx 'Close' "$KDIALOG_ARGS"
+    export NUDGE_STATE_DIR="$TMPDIR_TEST/state"
+    RETRY_REPORT_DIR="$NUDGE_STATE_DIR/reports"
+    mkdir -p "$RETRY_REPORT_DIR"
+    local good="$RETRY_REPORT_DIR/failure-20261025-120000.txt"
+    ( umask 077; echo report > "$good" )
+    : > "$KDIALOG_ARGS"
+    dialog_show_report "$good"
+    grep -q -- '--textbox' "$KDIALOG_ARGS"
+    grep -qx "$good" "$KDIALOG_ARGS"
+    : > "$KDIALOG_ARGS"
+    echo elsewhere > "$TMPDIR_TEST/failure-x.txt"
+    run ! dialog_show_report "$TMPDIR_TEST/failure-x.txt"
+    [[ ! -s "$KDIALOG_ARGS" ]]
+}

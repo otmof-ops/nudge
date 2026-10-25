@@ -1,4 +1,4 @@
-.TH NUDGE 1 "October 2026" "nudge 2.2.0" "User Commands"
+.TH NUDGE 1 "October 2026" "nudge 2.3.0" "User Commands"
 .SH NAME
 nudge \- a gentle nudge to keep your system fresh
 .SH SYNOPSIS
@@ -17,6 +17,19 @@ packages, Flatpak, Snap) with its subcategories (critical, security and
 other packages; applications and runtimes), select-all at each level, and
 single packages. Only what is chosen is updated, and sudo asks for a
 password in that window.
+.PP
+When a step does not go through, the session reads what the package manager
+said, names the cause (a lock held by another package manager, an interrupted
+dpkg, a full disk, a repository whose certificate cannot be verified, a
+missing repository key, a stale mirror, a package whose own install script
+failed, a snap that is still running, and so on) and asks
+whether to try the failed ones again. Every failed attempt is counted per
+update, across sessions; once the same update has failed
+\fBRETRY_REPORT_AFTER\fR times a failure report is written with the cause,
+the lines the package manager printed and the commands that might resolve it.
+nudge never runs those commands itself. The messages it recognises are the
+English ones; in another language the cause reads as unknown and the lines
+are quoted as they are.
 .PP
 nudge supports multiple package managers (apt, dnf, pacman, zypper),
 Flatpak and Snap integration, multiple notification backends
@@ -81,9 +94,19 @@ before filing it with the gh command.
 .TP
 .B \-\-report \-\-clear
 Delete all crash reports.
+.TP
+.B \-\-failures
+Show the updates that keep failing (how many attempts, since when, the cause)
+and the latest failure report.
+.TP
+.B \-\-failures \-\-json
+The same as one JSON object.
+.TP
+.B \-\-failures \-\-clear
+Forget the failing updates, the reports and the captured error output.
 .SH CONFIGURATION
 Configuration is stored in \fI~/.config/nudge/nudge.conf\fR.
-All 32 keys are listed below with their types and defaults.
+All 35 keys are listed below with their types and defaults.
 .SS Core Settings
 .TP
 .B ENABLED
@@ -178,6 +201,19 @@ false the update command runs straight away.
 .TP
 .B SNAPSHOT_TOOL
 (enum: auto|timeshift|snapper|btrfs, default: auto) Snapshot backend.
+.SS Failed Updates
+.TP
+.B RETRY_ASK
+(bool, default: true) After a step fails, ask in the terminal whether to try
+the failed ones again.
+.TP
+.B RETRY_MAX_ATTEMPTS
+(int, default: 3) Attempts a session may make at one step, the first included
+(1 = never retry).
+.TP
+.B RETRY_REPORT_AFTER
+(int, default: 2) Write the failure report once the same update has failed
+this many times, counted across sessions (1 = on the first failure).
 .SS Self-Update Settings
 .TP
 .B SELF_UPDATE_CHECK
@@ -273,6 +309,15 @@ The Nudge Bunny, the icon the dialogs show.
 .I ~/.local/share/nudge/history.jsonl
 JSONL history log.
 .TP
+.I ~/.local/share/nudge/failures.tsv
+The updates that keep failing: list, name, attempts, first and last failure, cause.
+.TP
+.I ~/.local/share/nudge/reports/
+Failure reports (the newest 20).
+.TP
+.I ~/.local/share/nudge/logs/
+What the package manager wrote to stderr in a failed step (the newest 30).
+.TP
 .I ~/.local/share/nudge/last_check
 Timestamp of last update check.
 .TP
@@ -357,6 +402,11 @@ nudge --validate
 Run config migration:
 .RS
 nudge --migrate
+.RE
+.PP
+See what keeps failing, and the latest failure report:
+.RS
+nudge --failures
 .RE
 .SH SEE ALSO
 .BR apt (8),

@@ -2,11 +2,11 @@
 # SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/nudge)
 # SPDX-License-Identifier: BSD-3-Clause
 # nudge — A gentle nudge to keep your system fresh.
-# Version: 2.2.0
+# Version: 2.3.0
 
 set -euo pipefail
 
-NUDGE_VERSION="2.2.0"
+NUDGE_VERSION="2.3.0"
 _NUDGE_START_TIME=$(date +%s)
 _NUDGE_TRIGGER="${_NUDGE_TRIGGER:-manual}"
 case "$_NUDGE_TRIGGER" in
@@ -62,6 +62,8 @@ source "$NUDGE_LIB_DIR/safety.sh"
 source "$NUDGE_LIB_DIR/selfupdate.sh"
 # shellcheck source=lib/errorreport.sh
 source "$NUDGE_LIB_DIR/errorreport.sh"
+# shellcheck source=lib/retry.sh
+source "$NUDGE_LIB_DIR/retry.sh"
 # shellcheck source=lib/tui.sh
 source "$NUDGE_LIB_DIR/tui.sh"
 # shellcheck source=lib/select.sh
@@ -138,6 +140,7 @@ _MIGRATE_CMD=false
 _REPORT_CMD=false
 _REPORT_FILE_CMD=false
 _REPORT_CLEAR_CMD=false
+_FAILURES_CMD=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -169,6 +172,9 @@ Options:
   --report               Show crash reports
   --report --file        File latest crash report as GitHub issue
   --report --clear       Clear all crash reports
+  --failures             Show the updates that keep failing, and the latest failure report
+  --failures --json      The same as JSON
+  --failures --clear     Forget the failing updates, the reports and the captured error output
 
 Environment:
   XDG_CONFIG_HOME        Config directory (default: ~/.config)
@@ -213,6 +219,7 @@ HELP
         --validate)    _VALIDATE_CMD=true ;;
         --migrate)     _MIGRATE_CMD=true ;;
         --report)      _REPORT_CMD=true ;;
+        --failures)    _FAILURES_CMD=true ;;
         --file)        _REPORT_FILE_CMD=true ;;
         --clear)       _REPORT_CLEAR_CMD=true ;;
         -*)
@@ -228,8 +235,16 @@ if [[ -n "$_HISTORY_SINCE" && "$_HISTORY_CMD" != "true" ]]; then
     echo "--since only makes sense with --history" >&2
     exit 10
 fi
-if [[ ( "$_REPORT_FILE_CMD" == "true" || "$_REPORT_CLEAR_CMD" == "true" ) && "$_REPORT_CMD" != "true" ]]; then
-    echo "--file and --clear only make sense with --report" >&2
+if [[ "$_REPORT_FILE_CMD" == "true" && "$_REPORT_CMD" != "true" ]]; then
+    echo "--file only makes sense with --report" >&2
+    exit 10
+fi
+if [[ "$_REPORT_CLEAR_CMD" == "true" && "$_REPORT_CMD" != "true" && "$_FAILURES_CMD" != "true" ]]; then
+    echo "--clear only makes sense with --report or --failures" >&2
+    exit 10
+fi
+if [[ "$_REPORT_CMD" == "true" && "$_FAILURES_CMD" == "true" ]]; then
+    echo "--report and --failures are two different things; ask for one" >&2
     exit 10
 fi
 
@@ -297,6 +312,17 @@ if [[ "$_REPORT_CMD" == "true" ]]; then
         errorreport_list 20 "json"
     else
         errorreport_list 20 "table"
+    fi
+    exit "$EXIT_OK"
+fi
+
+if [[ "$_FAILURES_CMD" == "true" ]]; then
+    if [[ "$_REPORT_CLEAR_CMD" == "true" ]]; then
+        retry_failures_clear
+    elif [[ "$_JSON_MODE" == "true" ]]; then
+        retry_failures_show json
+    else
+        retry_failures_show table
     fi
     exit "$EXIT_OK"
 fi
@@ -641,6 +667,14 @@ case "$NOTIFY_RESPONSE" in
         _UPG_DETAIL="system:${_UPG_SYSTEM} (${_UPG_SELECTED_SYSTEM:-0}/${_UPG_TOTAL_SYSTEM:-0})"
         _UPG_DETAIL+=" flatpak:${_UPG_FLATPAK} (${_UPG_SELECTED_FLATPAK:-0}/${_UPG_TOTAL_FLATPAK:-0})"
         _UPG_DETAIL+=" snap:${_UPG_SNAP} (${_UPG_SELECTED_SNAP:-0}/${_UPG_TOTAL_SNAP:-0})"
+        json_set "attempts" "${_UPG_ATTEMPTS:-1}"
+        if [[ -n "${_UPG_REPORT:-}" ]]; then
+            json_set "failure_report" "\"$(json_escape "$_UPG_REPORT")\""
+            _UPG_DETAIL+="; attempts: ${_UPG_ATTEMPTS:-1}; report: ${_UPG_REPORT}"
+        elif [[ "${_UPG_ATTEMPTS:-1}" -gt 1 ]]; then
+            _UPG_DETAIL+="; attempts: ${_UPG_ATTEMPTS}"
+        fi
+        [[ "${_UPG_RETRY_DECLINED:-0}" == "1" ]] && _UPG_DETAIL+="; retry declined"
 
         if [[ "$_UPGRADE_RC" -eq 2 ]]; then
             log_info "User cancelled at the selection menu"
@@ -648,6 +682,12 @@ case "$NOTIFY_RESPONSE" in
             json_emit "$EXIT_UPDATES_DECLINED"
             history_write "DECLINED" "Cancelled at the selection menu" "$EXIT_UPDATES_DECLINED"
             _nudge_exit "$EXIT_UPDATES_DECLINED"
+        fi
+
+        # The same updates keep failing: the report, in a dialog (the terminal showed it too)
+        if [[ -n "${_UPG_REPORT:-}" ]]; then
+            log_info "Failure report written: $_UPG_REPORT"
+            notify_failure_report "$_UPG_REPORT" || true
         fi
 
         if [[ "$_UPGRADE_RC" -eq 0 ]]; then

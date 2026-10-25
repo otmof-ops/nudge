@@ -156,7 +156,7 @@ EOF
     config_write "$outfile"
 
     [[ -f "$outfile" ]]
-    grep -q 'CONF_VERSION="2.1.0"' "$outfile"
+    grep -q 'CONF_VERSION="2.3.0"' "$outfile"
     grep -q 'ENABLED=true' "$outfile"
     grep -q 'SCHEDULE_MODE="login"' "$outfile"
 }
@@ -188,7 +188,7 @@ EOF
     config_migrate
 
     [[ -f "$NUDGE_CONFIG_FILE" ]]
-    grep -q 'CONF_VERSION="2.1.0"' "$NUDGE_CONFIG_FILE"
+    grep -q 'CONF_VERSION="2.3.0"' "$NUDGE_CONFIG_FILE"
 }
 
 # --- The parser accepts what people write ---
@@ -352,4 +352,47 @@ EOF
     [[ "$UPDATE_COMMAND" == "sudo apt update && sudo apt full-upgrade" ]]
     run config_validate
     [[ "$status" -ne 0 ]]
+}
+
+# --- The retry keys (2.3.0) ---
+
+@test "the retry keys default to ask, three attempts and a report on the second failure" {
+    NUDGE_CONFIG_FILE="$TMPDIR_TEST/nonexistent.conf"
+    NUDGE_LEGACY_CONFIG="$TMPDIR_TEST/also-nonexistent.conf"
+    config_load
+    [[ "$RETRY_ASK" == "true" ]]
+    [[ "$RETRY_MAX_ATTEMPTS" == "3" ]]
+    [[ "$RETRY_REPORT_AFTER" == "2" ]]
+    [[ "${CONFIG_TYPES[RETRY_ASK]}" == "bool" ]]
+    [[ "${CONFIG_TYPES[RETRY_MAX_ATTEMPTS]}" == "int" ]]
+    [[ "${CONFIG_TYPES[RETRY_REPORT_AFTER]}" == "int" ]]
+}
+
+@test "the retry keys are validated: a word is rejected, zero means one" {
+    run config_validate_value "RETRY_ASK" "maybe"
+    [[ "$status" -ne 0 ]]
+    run config_validate_value "RETRY_MAX_ATTEMPTS" "many"
+    [[ "$status" -ne 0 ]]
+    printf 'RETRY_MAX_ATTEMPTS=0\nRETRY_REPORT_AFTER=0\nRETRY_ASK=false\n' > "$TMPDIR_TEST/test.conf"
+    config_load "$TMPDIR_TEST/test.conf"
+    [[ "$RETRY_MAX_ATTEMPTS" == "1" ]]
+    [[ "$RETRY_REPORT_AFTER" == "1" ]]
+    [[ "$RETRY_ASK" == "false" ]]
+}
+
+@test "config_write and the template carry the retry keys under Failed Updates" {
+    NUDGE_CONFIG_FILE="$TMPDIR_TEST/nonexistent.conf"
+    NUDGE_LEGACY_CONFIG="$TMPDIR_TEST/also-nonexistent.conf"
+    config_load
+    RETRY_MAX_ATTEMPTS=5
+    local outfile="$TMPDIR_TEST/written.conf"
+    config_write "$outfile"
+    grep -q '^# --- Failed Updates ---' "$outfile"
+    grep -q '^RETRY_ASK=true' "$outfile"
+    grep -q '^RETRY_MAX_ATTEMPTS=5' "$outfile"
+    grep -q '^RETRY_REPORT_AFTER=2' "$outfile"
+    grep -q '^RETRY_ASK=true' "$PROJECT_DIR/nudge.conf"
+    grep -q '^RETRY_MAX_ATTEMPTS=3' "$PROJECT_DIR/nudge.conf"
+    grep -q '^RETRY_REPORT_AFTER=2' "$PROJECT_DIR/nudge.conf"
+    grep -q 'CONF_VERSION="2.3.0"' "$PROJECT_DIR/nudge.conf"
 }

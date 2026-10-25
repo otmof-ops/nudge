@@ -115,6 +115,15 @@ select_targets() {
     done
 }
 
+# Usage: select_list_targets <list>  -> every target in the list, selected or not
+select_list_targets() {
+    local list="$1" i
+    for i in "${!_SEL_LIST[@]}"; do
+        [[ "${_SEL_LIST[$i]}" == "$list" ]] || continue
+        printf '%s\n' "${_SEL_TARGET[$i]}"
+    done
+}
+
 # 0 when every row of the list is selected (and the list is not empty)
 select_all_on() {
     local sel tot

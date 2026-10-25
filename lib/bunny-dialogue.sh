@@ -91,6 +91,18 @@ _BUNNY_MSG_ZERO=(
     "sometimes i just check for fun. still zero!"
 )
 
+_BUNNY_MSG_FAILED=(
+    "uh oh... one of em got stuck."
+    "hmm. that one got stuck. wanna try again?"
+    "oopsie. not everything made it. one more go?"
+)
+
+_BUNNY_MSG_KEEPS_FAILING=(
+    "this one keeps getting stuck... i wrote down what might help."
+    "same thing again... here's what i found out."
+    "it's not you, it's the updates. i made a little report."
+)
+
 _BUNNY_MSG_REBOOT=(
     "um... you might need to do a restart thingy"
     "the computer wants to take a little nap"

@@ -570,3 +570,134 @@ dialog_reboot_ask() {
     esac
     return 1
 }
+
+# --- When the same updates keep failing ---
+# The failed lists with their causes, from what the session reported
+# (_UPG_CAUSE, _UPG_FAILS, _UPG_CULPRITS in lib/pkgmgr.sh): list|cause|fails|names
+_dialog_failure_rows() {
+    local list
+    for list in system flatpak snap; do
+        [[ -n "${_UPG_CAUSE[$list]:-}" ]] || continue
+        printf '%s|%s|%s|%s\n' "$list" "${_UPG_CAUSE[$list]}" "${_UPG_FAILS[$list]:-0}" "${_UPG_CULPRITS[$list]:-}"
+    done
+}
+_dialog_failure_title() {
+    case "${1:-}" in
+        system)  printf 'System packages (%s)' "${DETECTED_PKGMGR:-system}" ;;
+        flatpak) printf 'Flatpak' ;;
+        snap)    printf 'Snaps' ;;
+    esac
+}
+# What the cause means in one line, through lib/retry.sh when it is loaded
+_dialog_failure_headline() {
+    local list="$1" cause="$2"
+    shift 2
+    if declare -F retry_cause_headline >/dev/null 2>&1; then
+        retry_cause_headline "$cause" "${DETECTED_PKGMGR:-}" "$list" "$@"
+    else
+        printf '%s' "$cause"
+    fi
+}
+_dialog_failure_explain() {
+    if declare -F retry_cause_explain >/dev/null 2>&1; then
+        retry_cause_explain "$2" "${DETECTED_PKGMGR:-}" "$1"
+    fi
+}
+
+# Usage: dialog_failure_html <quote> <mood>
+dialog_failure_html() {
+    local quote="${1:-}" mood="${2:-teary}" img list cause fails names headline explain
+    local -a who=()
+    img=$(_dialog_img "$mood" 104)
+    local out='<html><body><table cellspacing="0" cellpadding="4"><tr>'
+    [[ -n "$img" ]] && out+="<td valign=\"top\" style=\"padding-right:14px\">${img}</td>"
+    out+='<td valign="top">'
+    out+='<span style="font-size:13pt;font-weight:bold">Some updates didn&#8217;t go through</span><br>'
+    out+="<span style=\"color:${DIALOG_C_DIM}\">$(dialog_escape "${_UPG_ATTEMPTS:-1} attempt")"
+    [[ "${_UPG_ATTEMPTS:-1}" -ne 1 ]] && out+="s"
+    out+=" this session</span>"
+    while IFS='|' read -r list cause fails names; do
+        [[ -z "$list" ]] && continue
+        read -ra who <<< "$names"
+        headline=$(_dialog_failure_headline "$list" "$cause" "${who[@]}")
+        explain=$(_dialog_failure_explain "$list" "$cause")
+        out+="<br><br>$(_dialog_chip_html "$DIALOG_C_CRIT" "#ffffff" "failed")&nbsp;<b>$(dialog_escape "$(_dialog_failure_title "$list")")</b>"
+        [[ "${fails:-0}" -gt 1 ]] && out+=" <span style=\"color:${DIALOG_C_DIM}\">· failed ${fails} times</span>"
+        out+="<br>$(dialog_escape "$headline")"
+        [[ -n "$explain" ]] && out+="<br><span style=\"color:${DIALOG_C_DIM}\">$(dialog_escape "$explain")</span>"
+    done < <(_dialog_failure_rows)
+    [[ -n "$quote" ]] && out+="<br><br><i>&#8220;$(dialog_escape "$quote")&#8221;</i>"
+    out+="<br><br>The report says what might resolve it. nudge does not run those commands for you."
+    out+='</td></tr></table></body></html>'
+    printf '%s' "$out"
+}
+
+# Usage: dialog_failure_pango <quote>
+dialog_failure_pango() {
+    local quote="${1:-}" list cause fails names headline explain nl=$'\n' out
+    local -a who=()
+    out='<span size="large" weight="bold">Some updates didn&#8217;t go through</span>'"${nl}"
+    out+="<span foreground=\"${DIALOG_C_DIM}\">$(dialog_escape "${_UPG_ATTEMPTS:-1} attempt")"
+    [[ "${_UPG_ATTEMPTS:-1}" -ne 1 ]] && out+="s"
+    out+=" this session</span>"
+    while IFS='|' read -r list cause fails names; do
+        [[ -z "$list" ]] && continue
+        read -ra who <<< "$names"
+        headline=$(_dialog_failure_headline "$list" "$cause" "${who[@]}")
+        explain=$(_dialog_failure_explain "$list" "$cause")
+        out+="${nl}${nl}$(_dialog_chip_pango "$DIALOG_C_CRIT" "#ffffff" "failed") <b>$(dialog_escape "$(_dialog_failure_title "$list")")</b>"
+        [[ "${fails:-0}" -gt 1 ]] && out+=" <span foreground=\"${DIALOG_C_DIM}\">· failed ${fails} times</span>"
+        out+="${nl}$(dialog_escape "$headline")"
+        [[ -n "$explain" ]] && out+="${nl}<span foreground=\"${DIALOG_C_DIM}\">$(dialog_escape "$explain")</span>"
+    done < <(_dialog_failure_rows)
+    [[ -n "$quote" ]] && out+="${nl}${nl}<i>&#8220;$(dialog_escape "$quote")&#8221;</i>"
+    out+="${nl}${nl}The report says what might resolve it. nudge does not run those commands for you."
+    printf '%s' "$out"
+}
+
+# Usage: dialog_failure_ask [quote] [mood] -> 0 to show the report, 1 to close
+dialog_failure_ask() {
+    local quote="${1:-}" mood="${2:-teary}" tool
+    tool=$(_dialog_tool) || return 1
+    local -a wrap=() zen_timeout=()
+    local dismiss="${AUTO_DISMISS:-0}"
+    if [[ "$dismiss" =~ ^[0-9]+$ && "$dismiss" -gt 0 ]]; then
+        wrap=(timeout "$dismiss")
+        zen_timeout=("--timeout=$dismiss")
+    fi
+    case "$tool" in
+        kdialog)
+            if "${wrap[@]}" kdialog --icon "$(_dialog_icon)" --title "nudge · some updates failed" \
+                --yes-label "Show Report" --no-label "Close" --yesno "$(dialog_failure_html "$quote" "$mood")" 2>/dev/null; then
+                return 0
+            fi
+            return 1
+            ;;
+        zenity)
+            if zenity --question --icon-name="$(_dialog_icon)" --title="nudge · some updates failed" --width=460 \
+                --ok-label="Show Report" --cancel-label="Close" --text="$(dialog_failure_pango "$quote")" "${zen_timeout[@]}" 2>/dev/null; then
+                return 0
+            fi
+            return 1
+            ;;
+    esac
+    return 1
+}
+
+# Show the failure report in a scrollable box. Only a report nudge wrote is
+# opened: a private regular file in the reports directory.
+dialog_show_report() {
+    local report="${1:-}" tool
+    if declare -F retry_report_trusted >/dev/null 2>&1; then
+        retry_report_trusted "$report" || return 1
+    else
+        [[ -f "$report" && ! -L "$report" ]] || return 1
+    fi
+    tool=$(_dialog_tool) || return 1
+    # the user asked for this box: AUTO_DISMISS does not close it under them
+    case "$tool" in
+        kdialog) kdialog --icon "$(_dialog_icon)" --title "nudge · failure report" --textbox "$report" 720 560 >/dev/null 2>&1 || true ;;
+        zenity)  zenity --text-info --title="nudge · failure report" --filename="$report" --font="monospace" --width=720 --height=560 >/dev/null 2>&1 || true ;;
+    esac
+    return 0
+}

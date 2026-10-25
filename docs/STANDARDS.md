@@ -18,7 +18,7 @@
 |---------|------|--------|-------------------|-------------------|
 | 1.0 | 2026-03-19 | Jay | Initial release — v2.0.0 standards | All |
 
-**Scope:** 70 files · 18 shell scripts · 15 test files · 17 documentation files · 31 configuration keys
+**Scope:** 22 shell scripts (the dispatcher, setup, install, uninstall and 18 modules) · 20 test files · 35 configuration keys
 
 This document is the single source of truth for all structural, coding, testing, and governance decisions in the nudge repository. Every contributor, automated pipeline, and maintenance task MUST conform to these rules. No exception is valid unless documented as an explicit override in [Appendix C — Exception Registry](#appendix-c--exception-registry).
 
@@ -149,7 +149,7 @@ The root must contain only core product files. Governance files belong in `docs/
 | `setup.sh` | root | Unified TUI — install, uninstall, configure, update, status |
 | `install.sh` | root | Thin wrapper → delegates to `setup.sh --install` |
 | `uninstall.sh` | root | Thin wrapper → delegates to `setup.sh --uninstall` |
-| `nudge.conf` | root | Configuration template (31 keys) |
+| `nudge.conf` | root | Configuration template (35 keys) |
 | `nudge.desktop` | root | XDG autostart desktop entry |
 | `Makefile` | root | Build targets: test, lint, install, uninstall |
 | `LICENSE` | root | BSD 3-Clause license (canonical text, copyright line filled) |
@@ -255,6 +255,7 @@ Functions use `lower_snake_case`. Module functions are prefixed with the module 
 | `schedule.sh` | `schedule_`, `parse_` | `schedule_due`, `parse_duration` |
 | `history.sh` | `history_` | `history_write`, `history_show` |
 | `safety.sh` | `safety_` | `safety_reboot_check`, `safety_snapshot` |
+| `retry.sh` | `retry_`, `_retry_` | `retry_diagnose`, `retry_report_save` |
 | `selfupdate.sh` | `selfupdate_`, `version_` | `selfupdate_check`, `version_gt` |
 | `tui.sh` | `_tui_` | `_tui_init`, `_tui_bunny`, `_tui_menu` |
 | `bunny-poses.sh` | `bunny_pose`, `_bunny_pose_` | `bunny_pose`, `_bunny_pose_sitting` |
@@ -339,7 +340,7 @@ No new required dependencies may be added without updating this table and the CR
 
 `nudge.sh` is a thin dispatcher (~440 lines) that:
 
-1. Locates and sources all 14 library modules from `lib/`
+1. Locates and sources all 18 library modules from `lib/`
 2. Parses CLI arguments
 3. Loads and validates configuration
 4. Handles utility commands (`--version`, `--help`, `--history`, `--config`, `--validate`, `--migrate`, `--defer`, `--self-update`)
@@ -349,24 +350,28 @@ The dispatcher must not contain subsystem logic. All subsystem logic belongs in 
 
 ### 3.2 Module Inventory
 
-Exactly 14 library modules exist. No new modules may be created without updating this file.
+Exactly 18 library modules exist. No new modules may be created without updating this file.
 
 | Module | Responsibility | Dependencies |
 |--------|---------------|-------------|
 | `output.sh` | Exit codes, log levels, JSON output, content rendering | None |
-| `config.sh` | Load, validate, migrate config | `output.sh` |
+| `config.sh` | Load, validate, migrate config; the update command grammar | `output.sh` |
 | `lock.sh` | flock-based instance locking | `output.sh` |
 | `network.sh` | Multi-method connectivity probe | `output.sh`, `bunny.sh` |
-| `pkgmgr.sh` | Package manager abstraction + flatpak + snap | `output.sh`, `config.sh` |
-| `notify.sh` | 5 notification backends + preview + deferral UI | `output.sh`, `config.sh`, `bunny.sh` |
+| `pkgmgr.sh` | Package manager abstraction + flatpak + snap; the upgrade session (GUI side and the terminal runner, with the retry loop) | `output.sh`, `config.sh`, `select.sh`, `tui.sh`, `retry.sh` |
+| `notify.sh` | 5 notification backends, the prompt, the reboot, self-update and failure-report notices | `output.sh`, `config.sh`, `bunny.sh`, `dialog.sh` |
 | `schedule.sh` | Scheduling, interval guards, deferral | `output.sh` |
 | `history.sh` | JSONL history log + viewer | `output.sh` |
 | `safety.sh` | Reboot detection + pre-upgrade snapshots | `output.sh`, `notify.sh` |
 | `selfupdate.sh` | GitHub release check + self-install | `output.sh` |
-| `tui.sh` | TUI rendering primitives — bunny, menus, input, colors | `output.sh`, `bunny.sh` |
-| `bunny-poses.sh` | 10 ASCII art pose functions | `bunny.sh` (face constants) |
-| `bunny-dialogue.sh` | 14+ dialogue arrays, random picker, no-repeat logic | None |
-| `bunny.sh` | Bunny orchestrator — render, season, context, state, faces, streak | `config.sh`, `bunny-poses.sh`, `bunny-dialogue.sh` |
+| `errorreport.sh` | Crash reports and GitHub issue filing | `output.sh` |
+| `retry.sh` | When an update does not go through: the diagnosis of the captured error output, the ledger of failing updates, the failure report | `output.sh`, `config.sh` |
+| `tui.sh` | TUI rendering primitives — the palette, frames, menus, input, the text bunny | `output.sh`, `bunny.sh` |
+| `select.sh` | The selection menu: the model and the line TUI | `tui.sh` |
+| `bunny-poses.sh` | Faces and the ASCII art poses | `bunny.sh` (face constants) |
+| `bunny-dialogue.sh` | Dialogue arrays, random picker, no-repeat logic | None |
+| `bunny.sh` | Bunny orchestrator — render, season, context, state, faces, streak, moods | `config.sh`, `bunny-poses.sh`, `bunny-dialogue.sh` |
+| `dialog.sh` | What the dialogs show: rich text and Pango bodies with the mascot, the pickers, the full list, the restart and failure-report dialogs | `notify.sh`, `retry.sh` |
 
 ### 3.3 Module Source Order
 
@@ -383,10 +388,14 @@ source "$NUDGE_LIB_DIR/schedule.sh"         # 7. Depends on output
 source "$NUDGE_LIB_DIR/history.sh"          # 8. Depends on output
 source "$NUDGE_LIB_DIR/safety.sh"           # 9. Depends on output, notify
 source "$NUDGE_LIB_DIR/selfupdate.sh"       # 10. Depends on output
-source "$NUDGE_LIB_DIR/tui.sh"              # 11. Depends on output
-source "$NUDGE_LIB_DIR/bunny-poses.sh"      # 12. Depends on bunny face constants
-source "$NUDGE_LIB_DIR/bunny-dialogue.sh"   # 13. No dependencies
-source "$NUDGE_LIB_DIR/bunny.sh"            # 14. Depends on config, bunny-poses, bunny-dialogue
+source "$NUDGE_LIB_DIR/errorreport.sh"      # 11. Depends on output
+source "$NUDGE_LIB_DIR/retry.sh"            # 12. Depends on output, config
+source "$NUDGE_LIB_DIR/tui.sh"              # 13. Depends on output
+source "$NUDGE_LIB_DIR/select.sh"           # 14. Depends on tui
+source "$NUDGE_LIB_DIR/bunny-poses.sh"      # 15. Depends on bunny face constants
+source "$NUDGE_LIB_DIR/bunny-dialogue.sh"   # 16. No dependencies
+source "$NUDGE_LIB_DIR/bunny.sh"            # 17. Depends on config, bunny-poses, bunny-dialogue
+source "$NUDGE_LIB_DIR/dialog.sh"           # 18. Depends on notify, retry, the lists in pkgmgr
 ```
 
 ### 3.4 Module Interface Rules
@@ -405,11 +414,14 @@ source "$NUDGE_LIB_DIR/bunny.sh"            # 14. Depends on config, bunny-poses
 | `_JSON_MODE`, `_VERBOSE_MODE` | `output.sh` | `output_init()` | `_log()`, `json_emit()` |
 | `_JSON_DATA` | `output.sh` | `json_set()` | `json_emit()` |
 | `CONFIG_DEFAULTS`, `CONFIG_TYPES` | `config.sh` | Module load | `config_load()`, `config_validate()` |
-| All 31 config keys | `config.sh` | `config_load()` | All modules |
+| All 35 config keys | `config.sh` | `config_load()` | All modules |
 | `LOCK_FD`, `LOCK_FILE` | `lock.sh` | `lock_acquire()` | `lock_release()` |
 | `DETECTED_PKGMGR` | `pkgmgr.sh` | `detect_pkgmgr()` | All pkgmgr functions |
 | `PKG_UPDATES_*` | `pkgmgr.sh` | `pkgmgr_count_updates()` | Dispatcher, notify, history |
 | `PKG_UPDATE_LIST` | `pkgmgr.sh` | `pkgmgr_list_updates()` | Preview, JSON |
+| `_UPG_*` (the session's result, including `_UPG_ATTEMPTS`, `_UPG_REPORT`, `_UPG_CAUSE`, `_UPG_FAILS`, `_UPG_CULPRITS`) | `pkgmgr.sh` | `_pkgmgr_read_status()` | Dispatcher, `dialog.sh` |
+| `_RETRY_F_*` (the session's failures per list) | `retry.sh` | `retry_record_failure()` | The runner, `retry_report_text()` |
+| `RETRY_LEDGER_FILE`, `RETRY_REPORT_DIR`, `RETRY_LOG_DIR`, `RETRY_REPORT_MAX`, `RETRY_LOG_MAX` | `retry.sh` | Module load | The ledger, report and capture functions |
 | `NOTIFY_BACKEND` | `notify.sh` | `notify_detect()` | All notify functions |
 | `NOTIFY_RESPONSE` | `notify.sh` | `notify_prompt()` | Dispatcher |
 | `HISTORY_FILE` | `history.sh` | Module load | `history_write()`, `history_show()` |
@@ -972,7 +984,7 @@ All documented exceptions to the rules in this standard. Every exception MUST be
 
 ## Appendix B — Configuration Key Reference
 
-All 32 configuration keys with types and defaults. This table is authoritative — it must match `CONFIG_DEFAULTS` and `CONFIG_TYPES` in `lib/config.sh` exactly.
+All 35 configuration keys with types and defaults. This table is authoritative — it must match `CONFIG_DEFAULTS` and `CONFIG_TYPES` in `lib/config.sh` exactly.
 
 | # | Key | Type | Default | Category |
 |---|-----|------|---------|----------|
@@ -1008,6 +1020,9 @@ All 32 configuration keys with types and defaults. This table is authoritative �
 | 30 | `SELF_UPDATE_CHANNEL` | enum:stable,beta | `stable` | Self-Update |
 | 31 | `BUNNY_PERSONALITY` | enum:classic,disney | `disney` | Personality |
 | 32 | `SELECT_UPDATES` | bool | `true` | Core |
+| 33 | `RETRY_ASK` | bool | `true` | Failed updates |
+| 34 | `RETRY_MAX_ATTEMPTS` | int | `3` | Failed updates |
+| 35 | `RETRY_REPORT_AFTER` | int | `2` | Failed updates |
 
 **Note:** `CONF_VERSION` is system-managed and documented with "do not edit" in the config template. `TERMINAL_EMULATOR` and `CRITICAL_PACKAGES_EXTRA` (strings, defaults `auto` and empty) complete the set.
 

@@ -213,6 +213,8 @@ json_emit() {
     "snap": ${_JSON_DATA[selected_snap]:-0}
   },
   "scope": ${_JSON_DATA[scope]:-null},
+  "attempts": ${_JSON_DATA[attempts]:-1},
+  "failure_report": ${_JSON_DATA[failure_report]:-null},
   "reboot_required": ${_JSON_DATA[reboot_required]:-false},
   "snapshot_id": ${_JSON_DATA[snapshot_id]:-null},
   "deferred": ${_JSON_DATA[deferred]:-false},

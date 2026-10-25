@@ -19,7 +19,7 @@ teardown() {
 @test "setup.sh --version prints version" {
     run "$SETUP" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge setup 2.2.0" ]]
+    [[ "$output" == "nudge setup 2.3.0" ]]
 }
 
 @test "setup.sh --help shows bunny and all flags" {
@@ -97,7 +97,7 @@ teardown() {
 
     # Build set of keys from CONFIG_CATEGORIES in setup.sh
     local cat_keys=""
-    cat_keys=$(grep -oP '\[(?:core|notification|network|schedule|packages|safety|updates|logging|terminal)\]="[^"]*"' "$SETUP" | \
+    cat_keys=$(grep -oP '\[(?:core|notification|network|schedule|packages|safety|updates|logging|terminal|retry)\]="[^"]*"' "$SETUP" | \
                grep -oP '"[^"]*"' | tr '"' ' ')
 
     # Every CONFIG_DEFAULTS key should appear in a category
@@ -248,10 +248,10 @@ teardown() {
     [[ -L "$TMPDIR_TEST/.local/bin/nudge" ]]
     [[ -f "$TMPDIR_TEST/.local/share/icons/hicolor/scalable/apps/nudge.svg" ]]
     run "$TMPDIR_TEST/.local/bin/nudge" --version
-    [[ "$output" == "nudge 2.2.0" ]]
+    [[ "$output" == "nudge 2.3.0" ]]
     run "$TMPDIR_TEST/.local/bin/nudge-setup.sh" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge setup 2.2.0" ]]
+    [[ "$output" == "nudge setup 2.3.0" ]]
 }
 
 @test "uninstall --keep-config keeps the history and state as well" {

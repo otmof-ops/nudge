@@ -3,12 +3,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # nudge — unified setup
 # Install, uninstall, configure, update, and status — all in one place.
-# Version: 2.2.0
+# Version: 2.3.0
 
 # shellcheck disable=SC2034  # NUDGE_VERSION is read by selfupdate.sh
 set -euo pipefail
 
-VERSION="2.2.0"
+VERSION="2.3.0"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # --- Find the libraries: the checkout's lib/, or an installed copy's ---
@@ -113,7 +113,7 @@ for arg in "$@"; do
         --help|-h)
             cat <<'HELPTEXT'
  (\__/)
- (='.'=)  nudge setup 2.2.0
+ (='.'=)  nudge setup 2.3.0
  (")_(")  unified installer, updater, and configurator
 
 Usage: setup.sh [OPTIONS]
@@ -270,6 +270,9 @@ _init_config_defaults() {
     CFG_TERMINAL_EMULATOR="auto"
     CFG_CRITICAL_PACKAGES_EXTRA=""
     CFG_SELECT_UPDATES=true
+    CFG_RETRY_ASK=true
+    CFG_RETRY_MAX_ATTEMPTS=3
+    CFG_RETRY_REPORT_AFTER=2
 
     case "${_DETECTED_PKG:-apt}" in
         apt)    CFG_UPDATE_COMMAND="sudo apt update && sudo apt full-upgrade" ;;
@@ -290,10 +293,11 @@ declare -A CONFIG_CATEGORIES=(
     [updates]="SELF_UPDATE_CHECK SELF_UPDATE_CHANNEL"
     [logging]="HISTORY_ENABLED HISTORY_MAX_LINES LOG_FILE LOG_LEVEL JSON_OUTPUT"
     [terminal]="TERMINAL_EMULATOR"
+    [retry]="RETRY_ASK RETRY_MAX_ATTEMPTS RETRY_REPORT_AFTER"
 )
 
-_CATEGORY_NAMES=(core notification network schedule packages safety updates logging terminal)
-_CATEGORY_LABELS=("Core settings" "Notifications" "Network" "Schedule" "Package managers" "Safety" "Updates & auto-update" "Logging" "Terminal")
+_CATEGORY_NAMES=(core notification network schedule packages safety updates logging terminal retry)
+_CATEGORY_LABELS=("Core settings" "Notifications" "Network" "Schedule" "Package managers" "Safety" "Updates & auto-update" "Logging" "Terminal" "Failed updates")
 
 # --- Load existing config ---
 _load_existing_config() {
@@ -1080,6 +1084,7 @@ _screen_configure() {
         "auto-update, channel"
         "history, log file, verbosity"
         "terminal emulator for upgrades"
+        "retry prompt, failure report"
     )
 
     while true; do

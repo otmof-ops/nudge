@@ -5,6 +5,87 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] — 2026-10-25
+
+When an update does not go through: a second go, and a report when it keeps
+happening.
+
+### Added
+- **Try again.** The update session captures what each step writes to stderr
+  (the window shows exactly what it did before: apt keeps its progress bar
+  and prints no scripting warning, sudo keeps its prompt). When a step fails
+  the session says what the package manager meant and asks whether to try
+  the failed ones again; only those run again, up to `RETRY_MAX_ATTEMPTS`
+  (default 3) per session. `RETRY_ASK=false` turns the question off. With no
+  terminal to ask on, the answer is no: an unattended session never loops.
+- **The diagnosis.** `lib/retry.sh` reads the captured output and names the
+  cause: a lock held by another package manager (with its pid), an
+  interrupted dpkg, a full disk, sudo refusing or a wrong password, a
+  repository whose certificate cannot be verified (named), a missing or
+  expired repository key, a damaged index or a wrong clock, a stale mirror
+  (404), an unreachable repository (named), no network, a package whose own
+  install script failed (the package is named), packages that do not fit
+  together, a file conflict on Arch, a snap that is still running (named),
+  snapd busy, a refresh on hold, a Flatpak remote that cannot be reached, a
+  Flatpak app that wants a newer Flatpak, snapd not running, a rejected
+  `UPDATE_COMMAND`, a no at the package manager's own question (apt's
+  "Abort." goes to stdout, so it is read from the exit code and a capture
+  with no `E:` line), or the command interrupted. A no, a Ctrl-C, sudo
+  refusing or a rejected command count against no update and get no retry
+  question. The messages recognised are the English ones; in another
+  language the cause reads as unknown and the lines are quoted as they are.
+  Each command of a step starts its capture afresh, so what an earlier,
+  successful command warned about is never read as the reason the next one
+  failed. Anything else is reported in the package manager's own words. The recognised messages were checked against
+  apt, dpkg, snapd, flatpak and sudo as installed, and the lock, the
+  certificate warning and the abort against a real apt run; dnf, pacman and
+  zypper follow their documented wording.
+- **The ledger.** Every failed attempt is counted per update in
+  `~/.local/share/nudge/failures.tsv` (list, name, attempts, first and last
+  failure, cause), across sessions; the row goes the moment the update goes
+  through, or when it is no longer pending. The names come from the package
+  manager's own output when it blamed one, otherwise from what was selected.
+- **The failure report.** Once the same update has failed
+  `RETRY_REPORT_AFTER` times (default 2: a retry that fails again already
+  counts) the session writes `~/.local/share/nudge/reports/failure-*.txt`:
+  what failed, how many times and since when, the cause and what it means,
+  the lines the package manager printed, the commands that might resolve it,
+  and where the captured output is. It is printed in the terminal, and once
+  the window closes a dialog with the bunny offers it (**Show Report** /
+  **Close**; kdialog shows it in a text box, zenity in a monospace one; the
+  passive backends say where it is). nudge never runs a remedy itself.
+- What is quoted from the package manager is scrubbed before it is shown or
+  kept in a report: escape sequences, C0 and C1 controls, the invisible and
+  direction-changing characters, and a user:password or a token in a URL
+  (`[redacted]`); the raw capture keeps the manager's own words, 0600, named
+  by `mktemp`. The names the diagnosis pulls out are validated in the C
+  locale, so a look-alike letter never passes. `tee` ignores the Ctrl-C that
+  apt and dpkg defer, so their stderr has somewhere to go until they stop.
+- `nudge --failures` (the ledger and the latest report), `--failures --json`,
+  `--failures --clear` (forgets the ledger, the reports and the captured
+  output). The newest 20 reports and 30 captures are kept; the capture of an
+  attempt that went through on the next try is deleted. A ledger that cannot
+  be written is a warning, never the end of the session.
+- The JSON output carries `attempts` and `failure_report`; the history row's
+  detail names the attempts and the report; the session status file carries
+  `attempts`, `retry_declined`, `report` and per list `cause_*`, `fails_*`
+  and `culprits_*`, each validated when read back.
+- The bunny has lines, a face and a mood for a failed step and for one that
+  keeps failing (`failed`, `keeps_failing`).
+- Three config keys: `RETRY_ASK`, `RETRY_MAX_ATTEMPTS`, `RETRY_REPORT_AFTER`
+  (config format 2.3.0; `setup.sh` has them under "Failed updates").
+- Tests: `test_retry.bats` is new (the diagnosis on sample output from every
+  package manager, the ledger, the report, the retry loop with scripted
+  answers, the capture); the integration suite drives a failing Flatpak
+  update through the retry prompt end to end.
+
+### Changed
+- The session's closing lines: the happy bunny only when everything went
+  through; a failure ends with the failures block and, when it keeps
+  happening, the report.
+- `--clear` is accepted with `--report` and with `--failures`; `--file` still
+  belongs to `--report` alone.
+
 ## [2.2.0] — 2026-10-09
 
 The dialogs, redrawn around the mascot, and a login run that no longer shows
