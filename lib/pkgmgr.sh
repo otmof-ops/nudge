@@ -40,6 +40,15 @@ _UPG_TOTAL_SYSTEM=0
 _UPG_TOTAL_FLATPAK=0
 _UPG_TOTAL_SNAP=0
 _UPG_SNAPSHOT_ID=""
+# What the retry loop recorded (lib/retry.sh): attempts made, whether the user
+# declined another try, the report written when a step keeps failing, and per
+# list the cause, how many times it has failed and the names it blamed
+_UPG_ATTEMPTS=1
+_UPG_RETRY_DECLINED=0
+_UPG_REPORT=""
+declare -gA _UPG_CAUSE=()
+declare -gA _UPG_FAILS=()
+declare -gA _UPG_CULPRITS=()
 
 _PKG_NATIVE_ARCH=""
 
@@ -632,8 +641,31 @@ _pkgmgr_read_status() {
             total_system)     _UPG_TOTAL_SYSTEM="${value//[!0-9]/}" ;;
             total_flatpak)    _UPG_TOTAL_FLATPAK="${value//[!0-9]/}" ;;
             total_snap)       _UPG_TOTAL_SNAP="${value//[!0-9]/}" ;;
+            attempts)         _UPG_ATTEMPTS="${value//[!0-9]/}" ;;
+            retry_declined)   _UPG_RETRY_DECLINED="${value//[!0-9]/}" ;;
+            report)
+                # a report the dialogs may open: our own private file in the reports directory
+                if declare -F retry_report_trusted >/dev/null 2>&1 && retry_report_trusted "$value"; then
+                    _UPG_REPORT="$value"
+                fi ;;
+            cause_system|cause_flatpak|cause_snap)
+                [[ "$value" =~ ^[a-z][a-z0-9-]{0,31}$ ]] && _UPG_CAUSE["${key#cause_}"]="$value" ;;
+            fails_system|fails_flatpak|fails_snap)
+                _UPG_FAILS["${key#fails_}"]="${value//[!0-9]/}" ;;
+            culprits_system|culprits_flatpak|culprits_snap)
+                local -a _names=() _kept=()
+                local _n
+                read -ra _names <<< "$value"
+                for _n in "${_names[@]}"; do
+                    if declare -F retry_valid_name >/dev/null 2>&1; then retry_valid_name "$_n" || continue
+                    else [[ "$_n" =~ ^[A-Za-z0-9][A-Za-z0-9+._:/@-]{0,127}$ ]] || continue; fi
+                    _kept+=("$_n")
+                done
+                _UPG_CULPRITS["${key#culprits_}"]="${_kept[*]:-}" ;;
         esac
     done < "$status_file"
+    [[ -z "$_UPG_ATTEMPTS" ]] && _UPG_ATTEMPTS=1
+    [[ -z "$_UPG_RETRY_DECLINED" ]] && _UPG_RETRY_DECLINED=0
     return 0
 }
 
@@ -679,6 +711,8 @@ pkgmgr_upgrade() {
     _UPG_SYSTEM="skipped"; _UPG_FLATPAK="skipped"; _UPG_SNAP="skipped"
     _UPG_SELECTED_SYSTEM=0; _UPG_SELECTED_FLATPAK=0; _UPG_SELECTED_SNAP=0
     _UPG_SNAPSHOT_ID=""
+    _UPG_ATTEMPTS=1; _UPG_RETRY_DECLINED=0; _UPG_REPORT=""
+    _UPG_CAUSE=(); _UPG_FAILS=(); _UPG_CULPRITS=()
 
     local self="${NUDGE_SELF:-}"
     if [[ -z "$self" || ! -f "$self" ]]; then
@@ -723,6 +757,8 @@ _RUNNER_STATUS=""
 _RUNNER_PKGMGR=""
 _RUNNER_ARCH=""
 _RUNNER_SCOPE="pick"   # a session without a scope line means nobody chose yet: the menu
+_RUNNER_STEP_LOG=""    # where the running step's stderr is also written (lib/retry.sh reads it)
+_RUNNER_LAST_RC=0      # the exit code of the last command a step ran
 
 _runner_status_write() {
     [[ -n "$_RUNNER_STATUS" ]] || return 0
@@ -848,6 +884,21 @@ _runner_result() {
     if declare -F _tui_result >/dev/null 2>&1; then _tui_result "$1" "$2"; else printf '    %s %s\n' "$1" "$2"; fi
 }
 
+# Run a command; its stderr is also written to _RUNNER_STEP_LOG when one is
+# set, so a failure can be read afterwards. stdout stays on the terminal (apt
+# keeps its progress bar, and prints no scripting warning) and sudo keeps its
+# prompt, which goes to the tty directly. The exit code is the command's own.
+_runner_exec_argv() {
+    local rc=0
+    if [[ -n "$_RUNNER_STEP_LOG" ]]; then
+        { "$@" 2>&1 1>&3 | tee -a "$_RUNNER_STEP_LOG" >&2 || rc="${PIPESTATUS[0]}"; } 3>&1
+    else
+        "$@" || rc=$?
+    fi
+    _RUNNER_LAST_RC="$rc"
+    return "$rc"
+}
+
 _runner_run_step() {
     # Usage: _runner_run_step <title> <command...>
     local title="$1"; shift
@@ -857,7 +908,7 @@ _runner_run_step() {
     _tui_operation_header "$title"
     printf '    %b$ %s%b\n\n' "${_TUI_SHADOW:-}" "$*" "${_TUI_RESET:-}"
     local rc=0
-    "${argv[@]}" || rc=$?
+    _runner_exec_argv "${argv[@]}" || rc=$?
     echo ""
     if [[ "$rc" -eq 0 ]]; then
         _runner_result ok "${title}: done"
@@ -884,7 +935,7 @@ _runner_exec_command() {
         [[ "${argv[0]}" == "sudo" ]] && argv[0]=$(_runner_sudo)
         printf '    %b$ %s%b\n' "${_TUI_SHADOW:-}" "$line" "${_TUI_RESET:-}"
         rc=0
-        "${argv[@]}" || rc=$?
+        _runner_exec_argv "${argv[@]}" || rc=$?
         if [[ "$rc" -ne 0 ]]; then
             echo ""
             _runner_result fail "${line}: exit ${rc}"
@@ -993,9 +1044,10 @@ _runner_scope_line() {
     printf '%s' "$out"
 }
 
-# The closing lines
+# The closing lines when everything went through (a failure ends with the
+# failures block and, when it keeps happening, the report)
 _runner_summary() {
-    local failures="$1" list sel tot parts=""
+    local list sel tot parts=""
     local personality="${BUNNY_PERSONALITY:-disney}"
     for list in system flatpak snap; do
         read -r sel tot <<< "$(select_count "$list")"
@@ -1003,15 +1055,165 @@ _runner_summary() {
         parts+="${parts:+ · }${_SEL_LIST_TITLE[$list]}: ${sel}"
     done
     echo ""
-    if [[ "$failures" -eq 0 ]]; then
-        local done_msg="all done! everything you picked is fresh."
-        [[ "$personality" == "classic" ]] && done_msg="Done. Everything selected was updated."
-        _tui_bunny "$done_msg" "$parts" "${BUNNY_FACE_HAPPY:-^.^}"
-    else
-        local fail_msg="some of that didn't go through."
-        [[ "$personality" == "classic" ]] && fail_msg="Some steps failed."
-        _tui_bunny "$fail_msg" "read the output above; nothing else was changed." "${BUNNY_FACE_WORRIED:-o.o}"
+    local done_msg="all done! everything you picked is fresh."
+    [[ "$personality" == "classic" ]] && done_msg="Done. Everything selected was updated."
+    _tui_bunny "$done_msg" "$parts" "${BUNNY_FACE_HAPPY:-^.^}"
+}
+
+# ============================================================
+# When a step does not go through: the retry loop and the report
+# ============================================================
+
+_runner_apply_list() {
+    case "$1" in
+        system)  _runner_apply_system ;;
+        flatpak) _runner_apply_flatpak ;;
+        snap)    _runner_apply_snap ;;
+        *) return 1 ;;
+    esac
+}
+
+# Open the step's stderr capture (nothing is captured when the directory cannot be made)
+_runner_step_begin() {
+    local list="$1" attempt="$2"
+    _RUNNER_LAST_RC=0
+    _RUNNER_STEP_LOG=$(retry_log_path "$list" "$attempt" 2>/dev/null) || _RUNNER_STEP_LOG=""
+}
+
+# The step went through: its capture goes, and the ledger forgets these names
+_runner_step_ok() {
+    local list="$1"
+    local -a names=()
+    mapfile -t names < <(select_targets "$list")
+    [[ -n "$_RUNNER_STEP_LOG" ]] && rm -f "$_RUNNER_STEP_LOG" 2>/dev/null
+    _RUNNER_STEP_LOG=""
+    retry_record_success "$list" "${names[@]}"
+}
+
+# The step failed: read what it said, count it against the names, keep the entry
+_runner_step_failed() {
+    local list="$1" attempt="$2"
+    local -a names=()
+    mapfile -t names < <(select_targets "$list")
+    retry_record_failure "$list" "$_RUNNER_PKGMGR" "$_RUNNER_LAST_RC" "$_RUNNER_STEP_LOG" "$attempt" "${names[@]}"
+    _RUNNER_STEP_LOG=""
+}
+
+# The names the headline and the remedy mention, as arguments
+_runner_blamed() {
+    # shellcheck disable=SC2086  # space-separated, validated names
+    printf '%s\n' ${_RETRY_F_CULPRITS[$1]:-}
+}
+
+# What failed and why, after an attempt
+_runner_failures_block() {
+    local attempt="$1" max="$2" list personality="${BUNNY_PERSONALITY:-disney}"
+    local msg="some of that didn't go through."
+    [[ "$personality" == "classic" ]] && msg="Some steps failed."
+    local sub=""
+    if [[ "$attempt" -lt "$max" && "${RETRY_ASK:-true}" == "true" ]]; then
+        sub="sometimes it just needs a second go."
+        [[ "$personality" == "classic" ]] && sub="A second attempt often succeeds."
     fi
+    _tui_bunny "$msg" "$sub" "${BUNNY_FACE_WORRIED:-o.o}"
+    local -a names=()
+    for list in $(retry_failed_lists); do
+        mapfile -t names < <(_runner_blamed "$list")
+        _runner_result fail "${_SEL_LIST_TITLE[$list]} · exit ${_RETRY_F_RC[$list]:-?} · $(retry_cause_headline "${_RETRY_F_CAUSE[$list]}" "$_RUNNER_PKGMGR" "$list" "${names[@]}")"
+        printf '      %b%s%b\n' "${_TUI_SHADOW:-}" "$(retry_cause_explain "${_RETRY_F_CAUSE[$list]}" "$_RUNNER_PKGMGR" "$list")" "${_TUI_RESET:-}"
+        if [[ "${_RETRY_F_STREAK[$list]:-0}" -gt 1 ]]; then
+            printf '      %bthe same update has failed %s times now%b\n' "${_TUI_WARNING:-}" "${_RETRY_F_STREAK[$list]}" "${_TUI_RESET:-}"
+        fi
+    done
+}
+
+# Try the failed ones again? Enter or y is yes; n, anything else, or no
+# terminal to ask on (EOF) is no, so an unattended session never loops.
+_runner_ask_retry() {
+    local answer=""
+    echo ""
+    # the question is printed, not passed to read -p: a prompt from read shows
+    # only when stdin is a terminal, and the session may be piped or logged
+    printf '    %b▶%b Try the failed ones again? [Y/n]: ' "${_TUI_PROMPT:-}" "${_TUI_RESET:-}"
+    if ! read -r answer 2>/dev/null </dev/tty; then
+        read -r answer || { echo ""; return 1; }
+    fi
+    answer="${answer//[[:space:]]/}"
+    case "${answer,,}" in
+        ""|y|yes) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# After the last attempt: the causes go to the status file for the dialogs, and
+# once the same update has failed RETRY_REPORT_AFTER times the report is written,
+# shown here and handed over
+_runner_failure_report() {
+    local attempt="$1" list personality="${BUNNY_PERSONALITY:-disney}"
+    for list in $(retry_failed_lists); do
+        _runner_status_write "cause_${list}" "${_RETRY_F_CAUSE[$list]}"
+        _runner_status_write "fails_${list}" "${_RETRY_F_STREAK[$list]:-0}"
+        _runner_status_write "culprits_${list}" "${_RETRY_F_CULPRITS[$list]:-}"
+    done
+    local report=""
+    if retry_report_due; then
+        if report=$(retry_report_save "$_RUNNER_PKGMGR" "$_RUNNER_SCOPE" "$attempt"); then
+            _runner_status_write report "$report"
+            local msg="this keeps failing... i wrote down what might help."
+            [[ "$personality" == "classic" ]] && msg="The same updates keep failing. The report says what might resolve it."
+            _tui_bunny "$msg" "nudge does not run these commands for you." "${BUNNY_FACE_TEARY:-T.T}"
+            _tui_operation_header "Failure report"
+            retry_report_text "$_RUNNER_PKGMGR" "$_RUNNER_SCOPE" "$attempt" | sed 's/^/    /'
+            printf '    %bsaved to %s%b\n' "${_TUI_SHADOW:-}" "$(_retry_tilde "$report")" "${_TUI_RESET:-}"
+            return 0
+        fi
+    fi
+    local msg="nothing else was changed."
+    [[ "$personality" == "classic" ]] && msg="Nothing else was changed."
+    _tui_bunny "$msg" "if it fails again i'll write up what might help." "${BUNNY_FACE_WORRIED:-o.o}"
+    for list in $(retry_failed_lists); do
+        [[ -n "${_RETRY_F_LOG[$list]:-}" ]] && _runner_result skip "${_SEL_LIST_TITLE[$list]}: the error output is at $(_retry_tilde "${_RETRY_F_LOG[$list]}")"
+    done
+    return 0
+}
+
+# Every step, then the failed ones again while the user says yes
+_runner_apply_all() {
+    local attempt=1 max="${RETRY_MAX_ATTEMPTS:-3}" done_lists=" " failed="" list
+    [[ "$max" =~ ^[0-9]+$ && "$max" -ge 1 ]] || max=3
+    _runner_status_write attempts 1
+    while :; do
+        failed=""
+        for list in system flatpak snap; do
+            [[ "$done_lists" == *" $list "* ]] && continue
+            _runner_step_begin "$list" "$attempt"
+            if _runner_apply_list "$list"; then
+                done_lists+="$list "
+                _runner_step_ok "$list"
+            else
+                failed+="$list "
+                _runner_step_failed "$list" "$attempt"
+            fi
+        done
+        [[ -z "$failed" ]] && break
+        echo ""
+        _runner_failures_block "$attempt" "$max"
+        [[ "$attempt" -lt "$max" && "${RETRY_ASK:-true}" == "true" ]] || break
+        if ! _runner_ask_retry; then
+            _runner_status_write retry_declined 1
+            break
+        fi
+        attempt=$((attempt + 1))
+        _runner_status_write attempts "$attempt"
+        echo ""
+        _tui_operation_header "Attempt ${attempt} of ${max}"
+    done
+    if [[ -n "$failed" ]]; then
+        echo ""
+        _runner_failure_report "$attempt"
+        return 1
+    fi
+    return 0
 }
 
 # --- Entry point: nudge.sh --_run-upgrade <session> ---
@@ -1085,11 +1287,16 @@ pkgmgr_run_upgrade_session() {
         fi
     fi
 
-    local failures=0
-    _runner_apply_system || failures=$((failures + 1))
-    _runner_apply_flatpak || failures=$((failures + 1))
-    _runner_apply_snap || failures=$((failures + 1))
+    # The ledger forgets updates that are no longer pending (installed some other way, or gone)
+    local list
+    local -a pending=()
+    for list in system flatpak snap; do
+        mapfile -t pending < <(select_list_targets "$list")
+        [[ "${#pending[@]}" -gt 0 ]] && printf '%s\n' "${pending[@]}" | retry_ledger_prune "$list"
+    done
 
-    _runner_summary "$failures"
+    if _runner_apply_all; then
+        _runner_summary
+    fi
     return 0
 }

@@ -252,3 +252,25 @@ teardown() {
     [[ "$status" -eq 0 ]]
     [[ ! -e "$NUDGE_STATE_DIR/EXECUTED" ]]
 }
+
+# --- A failed step, and one that keeps failing (2.3.0) ---
+
+@test "the bunny has lines, a face and a mood for a failed step and for one that keeps failing" {
+    [[ "${#_BUNNY_MSG_FAILED[@]}" -ge 3 ]]
+    [[ "${#_BUNNY_MSG_KEEPS_FAILING[@]}" -ge 3 ]]
+    source "$PROJECT_DIR/lib/bunny-poses.sh"
+    BUNNY_PERSONALITY="disney"
+    local msg
+    msg=$(bunny_message failed)
+    [[ " ${_BUNNY_MSG_FAILED[*]} " == *"$msg"* ]]
+    msg=$(bunny_message keeps_failing)
+    [[ " ${_BUNNY_MSG_KEEPS_FAILING[*]} " == *"$msg"* ]]
+    [[ "$(bunny_mood failed)" == "worried" ]]
+    [[ "$(bunny_mood keeps_failing)" == "teary" ]]
+    [[ "$(bunny_face failed)" == "$BUNNY_FACE_WORRIED" ]]
+    [[ "$(bunny_face keeps_failing)" == "$BUNNY_FACE_TEARY" ]]
+    BUNNY_PERSONALITY="classic"
+    [[ "$(bunny_message failed)" == "Some updates failed" ]]
+    [[ "$(bunny_message keeps_failing)" == *"keep failing"* ]]
+    [[ "$(bunny_mood keeps_failing)" == "normal" ]]
+}

@@ -11,7 +11,7 @@ _nudge_completions() {
     # Main flags
     local flags="--version --help --dry-run --check-only --json --verbose
                  --history --defer --self-update --config --validate --migrate
-                 --report"
+                 --report --failures"
 
     case "$prev" in
         --defer)
@@ -37,6 +37,10 @@ _nudge_completions() {
             COMPREPLY=($(compgen -W "--file --clear --json" -- "$cur"))
             return 0
             ;;
+        --failures)
+            COMPREPLY=($(compgen -W "--clear --json" -- "$cur"))
+            return 0
+            ;;
         --config)
             # Suggest config key names for reference
             local keys="ENABLED DELAY CHECK_SECURITY AUTO_DISMISS UPDATE_COMMAND
@@ -47,7 +51,8 @@ _nudge_completions() {
                         SNAPSHOT_TOOL SELF_UPDATE_CHECK SELF_UPDATE_CHANNEL OFFLINE_MODE
                         DEFERRAL_OPTIONS PKGMGR_OVERRIDE DUNST_APPNAME
                         JSON_OUTPUT LOG_LEVEL BUNNY_PERSONALITY
-                        TERMINAL_EMULATOR CRITICAL_PACKAGES_EXTRA SELECT_UPDATES"
+                        TERMINAL_EMULATOR CRITICAL_PACKAGES_EXTRA SELECT_UPDATES
+                        RETRY_ASK RETRY_MAX_ATTEMPTS RETRY_REPORT_AFTER"
             COMPREPLY=($(compgen -W "$keys" -- "$cur"))
             return 0
             ;;

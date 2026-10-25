@@ -143,6 +143,7 @@ nudge detects when a kernel upgrade has been applied and prompts you to reboot. 
 - **No root persistence** — nudge does not install system-wide daemons or services
 - **Limited network calls** — nudge makes outbound HTTPS requests only for connectivity probing and, if self-update is enabled, to the GitHub API (checked at most once per 24 hours); it opens no ports and accepts no inbound connections
 - **No automatic updates** — nudge prompts you; it never applies updates without your explicit confirmation
+- **No automatic repairs** — when an update fails, nudge asks before trying again, and the failure report only writes down the commands that might resolve it (`sudo dpkg --configure -a`, `sudo apt clean`, …); you read them, decide, and run them yourself
 
 ---
 

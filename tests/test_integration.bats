@@ -15,17 +15,17 @@ teardown() {
     [[ -n "${_INTEGRATION_TMPDIR:-}" ]] && rm -rf "$_INTEGRATION_TMPDIR" || true
 }
 
-@test "nudge --version prints 2.2.0" {
+@test "nudge --version prints 2.3.0" {
     run "$NUDGE" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge 2.2.0" ]]
+    [[ "$output" == "nudge 2.3.0" ]]
 }
 
 @test "nudge --help prints usage with bunny mascot" {
     run "$NUDGE" --help
     [[ "$status" -eq 0 ]]
     [[ "$output" == *'(\__/)'* ]]
-    [[ "$output" == *"nudge 2.2.0"* ]]
+    [[ "$output" == *"nudge 2.3.0"* ]]
     [[ "$output" == *"Usage:"* ]]
     [[ "$output" == *"--dry-run"* ]]
     [[ "$output" == *"--json"* ]]
@@ -75,7 +75,7 @@ teardown() {
 @test "install.sh --version prints version via setup.sh" {
     run "$PROJECT_DIR/install.sh" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge setup 2.2.0" ]]
+    [[ "$output" == "nudge setup 2.3.0" ]]
 }
 
 @test "install.sh --help shows setup.sh flags" {
@@ -113,6 +113,8 @@ teardown() {
     [[ -f "$PROJECT_DIR/lib/errorreport.sh" ]]
     [[ -f "$PROJECT_DIR/lib/tui.sh" ]]
     [[ -f "$PROJECT_DIR/lib/select.sh" ]]
+    [[ -f "$PROJECT_DIR/lib/dialog.sh" ]]
+    [[ -f "$PROJECT_DIR/lib/retry.sh" ]]
 }
 
 @test "all shell scripts pass bash -n syntax check" {
@@ -260,7 +262,7 @@ _integration_terminal() {
     cp "$PROJECT_DIR"/lib/*.sh "$prefix/.local/lib/nudge/"
     run env -u NUDGE_LIB_DIR HOME="$_INTEGRATION_TMPDIR/elsewhere" "$prefix/.local/bin/nudge.sh" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge 2.2.0" ]]
+    [[ "$output" == "nudge 2.3.0" ]]
 }
 
 @test "flags that need a value or a parent flag are usage errors, not silent runs" {
@@ -450,4 +452,109 @@ EOT
     grep -qx 'update -y' "$FLATPAK_LOG"
     run ! grep -q 'What should I install?' "$_INTEGRATION_TMPDIR/kdialog.log"
     grep -q 'Everything will be installed.' "$_INTEGRATION_TMPDIR/kdialog.log"
+}
+
+# --- When an update does not go through (2.3.0) ---
+
+# A Flatpak with one update whose `update` fails the first FAIL_TIMES calls with
+# a remote error, counting calls in FLATPAK_CALLS
+_integration_failing_flatpak() {
+    printf 'FLATPAK_ENABLED=true\n' >> "$XDG_CONFIG_HOME/nudge/nudge.conf"
+    cat > "$_INTEGRATION_TMPDIR/bin/flatpak" <<'EOT'
+#!/bin/bash
+case "${1:-}" in
+    remotes)   echo flathub ;;
+    remote-ls) [[ "$*" == *--app* ]] && printf 'app/org.x.Y/x86_64/stable\torg.x.Y\tY\t1.0\n' ;;
+    update)
+        echo x >> "$FLATPAK_CALLS"
+        if [[ "$(wc -l < "$FLATPAK_CALLS")" -le "${FAIL_TIMES:-99}" ]]; then
+            echo "Looking for updates…"
+            echo "error: Unable to load summary from remote flathub: While fetching https://dl.flathub.org/repo/summary.idx: [6] Couldn't resolve host name" >&2
+            exit 1
+        fi
+        ;;
+esac
+exit 0
+EOT
+    chmod +x "$_INTEGRATION_TMPDIR/bin/flatpak"
+    export FLATPAK_CALLS="$_INTEGRATION_TMPDIR/flatpak.calls"
+    : > "$FLATPAK_CALLS"
+}
+
+@test "a failed step is tried again on request and goes through the second time" {
+    _integration_mocks
+    _integration_terminal
+    _integration_kdialog flatpak
+    _integration_failing_flatpak
+    export FAIL_TIMES=1
+    run bash -c "printf 'y\n' | env DISPLAY=:0 KDE_SESSION_VERSION=5 '$NUDGE'"
+    [[ "$status" -eq 2 ]]
+    [[ "$(wc -l < "$FLATPAK_CALLS")" -eq 2 ]]
+    [[ "$output" == *"didn't go through"* ]]
+    [[ "$output" == *"the repository flathub could not be reached"* ]]
+    [[ "$output" == *"Try the failed ones again?"* ]]
+    [[ "$output" == *"Attempt 2 of 3"* ]]
+    [[ "$output" == *"all done!"* ]]
+    grep -q '"outcome":"APPLIED"' "$XDG_DATA_HOME/nudge/history.jsonl"
+    grep -q 'flatpak:ok (1/1)' "$XDG_DATA_HOME/nudge/history.jsonl"
+    grep -q '; attempts: 2"' "$XDG_DATA_HOME/nudge/history.jsonl"
+    # the attempt that went through forgave the ledger, and the capture of the failed one is gone
+    [[ ! -s "$XDG_DATA_HOME/nudge/failures.tsv" ]]
+    run ! grep -q 'Show Report' "$_INTEGRATION_TMPDIR/kdialog.log"
+}
+
+@test "a step that fails twice ends with the failure report, the dialog offers it, and --failures shows it" {
+    _integration_mocks
+    _integration_terminal
+    _integration_kdialog flatpak
+    _integration_failing_flatpak
+    printf 'RETRY_MAX_ATTEMPTS=2\n' >> "$XDG_CONFIG_HOME/nudge/nudge.conf"
+    export FAIL_TIMES=99
+    run bash -c "printf 'y\n' | env DISPLAY=:0 KDE_SESSION_VERSION=5 '$NUDGE'"
+    [[ "$status" -eq 2 ]]
+    [[ "$(wc -l < "$FLATPAK_CALLS")" -eq 2 ]]
+    [[ "$output" == *"this keeps failing"* ]]
+    [[ "$output" == *"nudge · failure report"* ]]
+    [[ "$output" == *"the same update has failed 2 times"* ]]
+    [[ "$output" == *"flatpak remote-ls flathub"* ]]
+    local report
+    report=$(ls "$XDG_DATA_HOME"/nudge/reports/failure-*.txt)
+    [[ -f "$report" && "$(stat -c %a "$report")" == "600" ]]
+    grep -q 'the repository flathub could not be reached' "$report"
+    grep -q "report: $report" "$XDG_DATA_HOME/nudge/history.jsonl"
+    grep -q 'flatpak:failed (1/1)' "$XDG_DATA_HOME/nudge/history.jsonl"
+    # the dialog offered the report with the causes drawn in
+    grep -qx 'Show Report' "$_INTEGRATION_TMPDIR/kdialog.log"
+    grep -q 'the repository flathub could not be reached' "$_INTEGRATION_TMPDIR/kdialog.log"
+    grep -q 'failed 2 times' "$_INTEGRATION_TMPDIR/kdialog.log"
+    # the ledger has the row, and --failures shows it with the report
+    grep -q $'flatpak\tapp/org.x.Y/x86_64/stable\t2' "$XDG_DATA_HOME/nudge/failures.tsv"
+    run "$NUDGE" --failures
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"app/org.x.Y/x86_64/stable"*"2"*"repo-unreachable"* ]]
+    [[ "$output" == *"nudge · failure report"* ]]
+    run "$NUDGE" --failures --json
+    [[ "$output" == *'"attempts":2'* ]]
+    run "$NUDGE" --failures --clear
+    [[ ! -f "$XDG_DATA_HOME/nudge/failures.tsv" && -z "$(ls "$XDG_DATA_HOME"/nudge/reports/ 2>/dev/null)" ]]
+}
+
+@test "declining the retry leaves one attempt and the captured output; no terminal to ask on means no retry" {
+    _integration_mocks
+    _integration_terminal
+    _integration_kdialog flatpak
+    _integration_failing_flatpak
+    export FAIL_TIMES=99
+    run bash -c "printf 'n\n' | env DISPLAY=:0 KDE_SESSION_VERSION=5 '$NUDGE'"
+    [[ "$status" -eq 2 ]]
+    [[ "$(wc -l < "$FLATPAK_CALLS")" -eq 1 ]]
+    [[ "$output" == *"nothing else was changed."* ]]
+    [[ "$output" == *"the error output is at"* ]]
+    ls "$XDG_DATA_HOME"/nudge/logs/upgrade-*-flatpak-1.log >/dev/null
+    grep -q 'flatpak:failed (1/1)' "$XDG_DATA_HOME/nudge/history.jsonl"
+    run ! grep -q 'attempts: ' "$XDG_DATA_HOME/nudge/history.jsonl"
+    run ! grep -q 'Show Report' "$_INTEGRATION_TMPDIR/kdialog.log"
+    : > "$FLATPAK_CALLS"
+    run bash -c "env DISPLAY=:0 KDE_SESSION_VERSION=5 '$NUDGE' </dev/null"
+    [[ "$(wc -l < "$FLATPAK_CALLS")" -eq 1 ]]
 }

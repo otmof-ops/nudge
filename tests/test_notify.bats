@@ -558,3 +558,33 @@ EOF
     notify_prompt "test"
     grep -qx 'nudge' "$KDIALOG_ARGS"
 }
+
+# --- The failure report (2.3.0) ---
+
+@test "notify_failure_report asks through the dialog on kdialog and shows the report on yes" {
+    NOTIFY_BACKEND="kdialog"
+    dialog_failure_ask() { echo "asked:$1:$2" >> "$TMPDIR_TEST/calls"; return 0; }
+    dialog_show_report() { echo "shown:$1" >> "$TMPDIR_TEST/calls"; }
+    bunny_message() { echo "a line"; }
+    bunny_mood() { echo "teary"; }
+    notify_failure_report "$TMPDIR_TEST/report.txt"
+    grep -qx "asked:a line:teary" "$TMPDIR_TEST/calls"
+    grep -qx "shown:$TMPDIR_TEST/report.txt" "$TMPDIR_TEST/calls"
+    : > "$TMPDIR_TEST/calls"
+    dialog_failure_ask() { return 1; }
+    notify_failure_report "$TMPDIR_TEST/report.txt"
+    run ! grep -q 'shown' "$TMPDIR_TEST/calls"
+}
+
+@test "notify_failure_report says where the report is on a passive backend" {
+    NOTIFY_BACKEND="notify-send"
+    cat > "$MOCK_BIN/notify-send" <<EOF
+#!/bin/bash
+printf '%s\n' "\$@" > "$TMPDIR_TEST/notify.args"
+EOF
+    chmod +x "$MOCK_BIN/notify-send"
+    PATH="$MOCK_BIN:$PATH"
+    notify_failure_report "$TMPDIR_TEST/report.txt"
+    grep -qx 'Some updates did not go through' "$TMPDIR_TEST/notify.args"
+    grep -q 'nudge --failures' "$TMPDIR_TEST/notify.args"
+}

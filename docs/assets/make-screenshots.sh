@@ -43,6 +43,8 @@ sample() {
     source lib/bunny-dialogue.sh
     # shellcheck source=lib/bunny.sh
     source lib/bunny.sh
+    # shellcheck source=lib/retry.sh
+    source lib/retry.sh
     # shellcheck source=lib/dialog.sh
     source lib/dialog.sh
     NUDGE_MASCOT_DIR="$PWD/share/mascot"
@@ -82,6 +84,15 @@ shot "$OUT/screenshot-list.png"
 
 ( sample; DEFERRAL_OPTIONS="1h,4h,1d,1w" dialog_defer_pick "okie dokie! i come back later~" >/dev/null 2>&1 || true ) &
 shot "$OUT/screenshot-defer.png"
+
+# --- When the same updates keep failing: the report offered ---
+( sample
+  _UPG_ATTEMPTS=2
+  declare -gA _UPG_CAUSE=([system]="lock" [snap]="snap-running")
+  declare -gA _UPG_FAILS=([system]="3" [snap]="2")
+  declare -gA _UPG_CULPRITS=([system]="4321" [snap]="firefox")
+  dialog_failure_ask "this one keeps getting stuck... i wrote down what might help." teary >/dev/null 2>&1 || true ) &
+shot "$OUT/screenshot-failure.png"
 
 # --- The terminal session: the menu, in konsole when there is one ---
 sess="$TMP/session"

@@ -16,9 +16,9 @@ NUDGE_STATE_DIR="$NUDGE_DATA_DIR"
 NUDGE_LEGACY_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/nudge.conf"
 
 # --- The config format this version writes ---
-readonly NUDGE_CONF_VERSION="2.1.0"
+readonly NUDGE_CONF_VERSION="2.3.0"
 
-# --- Default values for all 32 config keys ---
+# --- Default values for all 35 config keys ---
 declare -gA CONFIG_DEFAULTS=(
     # v1.x keys
     [ENABLED]="true"
@@ -32,7 +32,7 @@ declare -gA CONFIG_DEFAULTS=(
     [NOTIFICATION_BACKEND]="auto"
     [LOG_FILE]=""
     # v2.0 keys
-    [CONF_VERSION]="2.1.0"
+    [CONF_VERSION]="2.3.0"
     [SCHEDULE_MODE]="login"
     [SCHEDULE_INTERVAL_HOURS]="24"
     [HISTORY_ENABLED]="true"
@@ -57,6 +57,10 @@ declare -gA CONFIG_DEFAULTS=(
     [CRITICAL_PACKAGES_EXTRA]=""
     # v2.1 keys
     [SELECT_UPDATES]="true"
+    # v2.3 keys
+    [RETRY_ASK]="true"
+    [RETRY_MAX_ATTEMPTS]="3"
+    [RETRY_REPORT_AFTER]="2"
 )
 
 # --- Type declarations ---
@@ -95,6 +99,9 @@ declare -gA CONFIG_TYPES=(
     [TERMINAL_EMULATOR]="string"
     [CRITICAL_PACKAGES_EXTRA]="string"
     [SELECT_UPDATES]="bool"
+    [RETRY_ASK]="bool"
+    [RETRY_MAX_ATTEMPTS]="int"
+    [RETRY_REPORT_AFTER]="int"
 )
 
 # --- Validate a single key/value pair ---
@@ -252,6 +259,10 @@ config_load() {
         log_warn "DEFERRAL_OPTIONS must be durations like 1h,4h,1d — resetting to default"
         DEFERRAL_OPTIONS="${CONFIG_DEFAULTS[DEFERRAL_OPTIONS]}"
     fi
+
+    # RETRY_MAX_ATTEMPTS is at least the one attempt; RETRY_REPORT_AFTER at least the one failure
+    if [[ "${RETRY_MAX_ATTEMPTS:-3}" -lt 1 ]]; then RETRY_MAX_ATTEMPTS=1; fi
+    if [[ "${RETRY_REPORT_AFTER:-2}" -lt 1 ]]; then RETRY_REPORT_AFTER=1; fi
 
     # Validate LOG_FILE — a regular file (or absent) under a directory we can name
     if [[ -n "${LOG_FILE:-}" ]]; then
@@ -527,6 +538,14 @@ HEADER
     printf 'SNAPSHOT_ENABLED=%s\n' "${SNAPSHOT_ENABLED:-false}"
     printf '\n# Snapshot backend: auto, timeshift, snapper, btrfs\n'
     printf 'SNAPSHOT_TOOL="%s"\n' "${SNAPSHOT_TOOL:-auto}"
+
+    printf '\n# --- Failed Updates ---\n'
+    printf '\n# After a step fails, ask in the terminal whether to try the failed ones again (true/false)\n'
+    printf 'RETRY_ASK=%s\n' "${RETRY_ASK:-true}"
+    printf '\n# Attempts a session may make at one step, the first included (1 = never retry)\n'
+    printf 'RETRY_MAX_ATTEMPTS=%s\n' "${RETRY_MAX_ATTEMPTS:-3}"
+    printf '\n# Write the failure report once the same update has failed this many times, counted across sessions (1 = on the first failure)\n'
+    printf 'RETRY_REPORT_AFTER=%s\n' "${RETRY_REPORT_AFTER:-2}"
 
     printf '\n# --- Self-Update Settings ---\n'
     printf '\n# Check GitHub for newer nudge version (true/false)\n'

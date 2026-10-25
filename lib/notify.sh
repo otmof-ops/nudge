@@ -374,3 +374,35 @@ notify_selfupdate() {
             ;;
     esac
 }
+
+# --- When the same updates keep failing: the report ---
+# Usage: notify_failure_report <report file>
+# kdialog and zenity ask whether to open the report (lib/dialog.sh draws the
+# question with the bunny and the causes); the passive backends say where it is.
+notify_failure_report() {
+    local report="${1:-}" quote="" mood="teary"
+    quote=$(bunny_message "keeps_failing" 2>/dev/null) || quote=""
+    mood=$(bunny_mood "keeps_failing" 2>/dev/null) || mood="teary"
+    case "$NOTIFY_BACKEND" in
+        kdialog|zenity)
+            if declare -F dialog_failure_ask >/dev/null 2>&1; then
+                if dialog_failure_ask "$quote" "$mood"; then
+                    dialog_show_report "$report"
+                fi
+                return 0
+            fi
+            ;;
+    esac
+    local title="Some updates did not go through" body="The report says what might resolve it: nudge --failures"
+    case "$NOTIFY_BACKEND" in
+        kdialog)
+            kdialog --icon "$(_notify_icon name)" --title "nudge" --passivepopup "${title}. ${body}" 15 2>/dev/null || true ;;
+        zenity)
+            zenity --info --icon-name="$(_notify_icon name)" --title="nudge" --text="${title}. ${body}" --timeout=15 2>/dev/null || true ;;
+        dunstify)
+            dunstify -i "$(_notify_icon path)" -a "${DUNST_APPNAME:-nudge}" "$title" "$body" 2>/dev/null || true ;;
+        *)
+            notify-send -i "$(_notify_icon path)" "$title" "$body" 2>/dev/null || true ;;
+    esac
+    return 0
+}

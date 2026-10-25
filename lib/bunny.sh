@@ -113,8 +113,11 @@ bunny_face() {
         zero)
             echo "$BUNNY_FACE_NORMAL"
             ;;
-        reboot)
+        reboot|failed)
             echo "$BUNNY_FACE_WORRIED"
+            ;;
+        keeps_failing)
+            echo "$BUNNY_FACE_TEARY"
             ;;
         snapshot)
             echo "$BUNNY_FACE_NORMAL"
@@ -204,6 +207,12 @@ _bunny_message_disney() {
         reboot)
             _bunny_pick_message "_BUNNY_MSG_REBOOT"
             ;;
+        failed)
+            _bunny_pick_message "_BUNNY_MSG_FAILED"
+            ;;
+        keeps_failing)
+            _bunny_pick_message "_BUNNY_MSG_KEEPS_FAILING"
+            ;;
         snapshot)
             _bunny_pick_message "_BUNNY_MSG_SNAPSHOT"
             ;;
@@ -250,6 +259,12 @@ _bunny_message_classic() {
             ;;
         reboot)
             echo "A system reboot is required"
+            ;;
+        failed)
+            echo "Some updates failed"
+            ;;
+        keeps_failing)
+            echo "The same updates keep failing; the report says what might resolve it"
             ;;
         snapshot)
             echo "Pre-upgrade snapshot created"
@@ -435,10 +450,10 @@ _bunny_select_pose() {
         zero)
             echo "sleeping"
             ;;
-        reboot)
+        reboot|failed)
             echo "tapping"
             ;;
-        snapshot)
+        snapshot|keeps_failing)
             echo "handing"
             ;;
         selfupdate)
@@ -490,7 +505,8 @@ bunny_mood() {
         big_update)          echo "wide" ;;
         accepted|security)   echo "happy" ;;
         zero)                echo "sleepy" ;;
-        reboot|network)      echo "worried" ;;
+        reboot|network|failed) echo "worried" ;;
+        keeps_failing)       echo "teary" ;;
         prompt)
             if [[ "$streak" -ge 5 ]]; then echo "crying"
             elif [[ "$streak" -ge 4 ]]; then echo "teary"

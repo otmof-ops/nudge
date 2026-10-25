@@ -589,3 +589,191 @@ EOF
     _runner_apply_system
     grep -q '^FULL' "$TMPDIR_TEST/steps"
 }
+
+# --- The retry loop (2.3.0) ---
+
+_retry_runner_setup() {
+    source "$PROJECT_DIR/lib/tui.sh"
+    _TUI_NO_COLOR=true _tui_init
+    source "$PROJECT_DIR/lib/select.sh"
+    export NUDGE_STATE_DIR="$TMPDIR_TEST/state"
+    mkdir -p "$NUDGE_STATE_DIR"
+    source "$PROJECT_DIR/lib/retry.sh"
+    _RUNNER_PKGMGR="apt"; DETECTED_PKGMGR="apt"; _RUNNER_SCOPE="all"
+    _RUNNER_STATUS="$TMPDIR_TEST/status"
+    : > "$_RUNNER_STATUS"
+    select_reset
+    select_add system standard "vim" vim
+    select_add system security "openssl" openssl
+    select_add flatpak app "Y" app/org.x.Y/x86_64/stable
+    select_apply_scope all
+    : > "$TMPDIR_TEST/calls"
+}
+
+# A system step that fails until the counter file says otherwise, writing apt's words to the capture
+_failing_system_step() {
+    echo "system" >> "$TMPDIR_TEST/calls"
+    local n
+    n=$(grep -c '^system$' "$TMPDIR_TEST/calls")
+    if [[ "$n" -le "${FAIL_TIMES:-99}" ]]; then
+        echo "E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 4321 (apt-get)" >> "$_RUNNER_STEP_LOG"
+        _RUNNER_LAST_RC=100
+        _runner_status_write system failed
+        return 1
+    fi
+    _runner_status_write system ok
+    return 0
+}
+_ok_flatpak_step() { echo "flatpak" >> "$TMPDIR_TEST/calls"; _runner_status_write flatpak ok; return 0; }
+
+@test "_runner_exec_argv keeps stdout on the terminal and copies stderr to the capture, with the command's exit code" {
+    _RUNNER_STEP_LOG="$TMPDIR_TEST/capture.log"
+    : > "$_RUNNER_STEP_LOG"
+    run _runner_exec_argv bash -c 'echo to-stdout; echo to-stderr >&2; exit 7'
+    [[ "$status" -eq 7 ]]
+    [[ "$output" == *"to-stdout"* && "$output" == *"to-stderr"* ]]
+    [[ "$(cat "$TMPDIR_TEST/capture.log")" == "to-stderr" ]]
+    _RUNNER_STEP_LOG=""
+    run _runner_exec_argv bash -c 'echo plain >&2; exit 3'
+    [[ "$status" -eq 3 ]]
+    [[ "$output" == "plain" ]]
+}
+
+@test "_runner_run_step records the exit code the command gave" {
+    source "$PROJECT_DIR/lib/tui.sh"; _TUI_NO_COLOR=true _tui_init
+    _RUNNER_STEP_LOG=""
+    run _runner_run_step "A step" bash -c 'exit 5'
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"A step: exit 5"* ]]
+    _runner_run_step "A step" bash -c 'exit 5' >/dev/null || true
+    [[ "$_RUNNER_LAST_RC" -eq 5 ]]
+}
+
+@test "a failed step is tried again when the user says yes, and only the failed one runs again" {
+    _retry_runner_setup
+    FAIL_TIMES=1
+    _runner_apply_system() { _failing_system_step; }
+    _runner_apply_flatpak() { _ok_flatpak_step; }
+    _runner_apply_snap() { _runner_status_write snap skipped; return 0; }
+    _runner_ask_retry() { echo "asked" >> "$TMPDIR_TEST/calls"; return 0; }
+    run _runner_apply_all
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"didn't go through"* ]]
+    [[ "$output" == *"another package manager is running (pid 4321)"* ]]
+    [[ "$(grep -c '^system$' "$TMPDIR_TEST/calls")" -eq 2 ]]
+    [[ "$(grep -c '^flatpak$' "$TMPDIR_TEST/calls")" -eq 1 ]]
+    grep -qx 'attempts=2' "$_RUNNER_STATUS"
+    [[ "$(grep '^system=' "$_RUNNER_STATUS" | tail -1)" == "system=ok" ]]
+    run ! grep -q '^retry_declined=' "$_RUNNER_STATUS"
+}
+
+@test "the attempt that goes through forgives the ledger; a declined retry keeps the cause for the dialogs" {
+    _retry_runner_setup
+    FAIL_TIMES=1
+    _runner_apply_system() { _failing_system_step; }
+    _runner_apply_flatpak() { _ok_flatpak_step; }
+    _runner_apply_snap() { _runner_status_write snap skipped; return 0; }
+    _runner_ask_retry() { return 0; }
+    _runner_apply_all >/dev/null
+    [[ -z "$(retry_ledger_rows)" ]]
+    # declined: one attempt, the cause and the capture kept
+    : > "$TMPDIR_TEST/calls"; : > "$_RUNNER_STATUS"
+    FAIL_TIMES=99
+    _runner_ask_retry() { return 1; }
+    run _runner_apply_all
+    [[ "$status" -eq 1 ]]
+    grep -qx 'retry_declined=1' "$_RUNNER_STATUS"
+    grep -qx 'attempts=1' "$_RUNNER_STATUS"
+    grep -qx 'cause_system=lock' "$_RUNNER_STATUS"
+    grep -qx 'fails_system=1' "$_RUNNER_STATUS"
+    grep -qx 'culprits_system=4321' "$_RUNNER_STATUS"
+    [[ "$output" == *"the error output is at"* ]]
+    run ! grep -q '^report=' "$_RUNNER_STATUS"
+    [[ "$(retry_ledger_rows | cut -f2 | sort | tr '\n' ' ')" == "openssl vim " ]]
+    ls "$NUDGE_STATE_DIR"/logs/upgrade-*-system-1.log >/dev/null
+}
+
+@test "the attempts stop at RETRY_MAX_ATTEMPTS, and with RETRY_ASK=false nobody is asked" {
+    _retry_runner_setup
+    FAIL_TIMES=99
+    _runner_apply_system() { _failing_system_step; }
+    _runner_apply_flatpak() { _ok_flatpak_step; }
+    _runner_apply_snap() { _runner_status_write snap skipped; return 0; }
+    _runner_ask_retry() { echo "asked" >> "$TMPDIR_TEST/calls"; return 0; }
+    RETRY_MAX_ATTEMPTS=2
+    RETRY_REPORT_AFTER=5
+    run _runner_apply_all
+    [[ "$status" -eq 1 ]]
+    [[ "$(grep -c '^system$' "$TMPDIR_TEST/calls")" -eq 2 ]]
+    [[ "$(grep -c '^asked$' "$TMPDIR_TEST/calls")" -eq 1 ]]
+    grep -qx 'attempts=2' "$_RUNNER_STATUS"
+    : > "$TMPDIR_TEST/calls"; : > "$_RUNNER_STATUS"
+    RETRY_MAX_ATTEMPTS=3 RETRY_ASK=false
+    run _runner_apply_all
+    [[ "$(grep -c '^system$' "$TMPDIR_TEST/calls")" -eq 1 ]]
+    run ! grep -q '^asked$' "$TMPDIR_TEST/calls"
+}
+
+@test "once the same update has failed RETRY_REPORT_AFTER times the report is written, shown and handed over" {
+    _retry_runner_setup
+    FAIL_TIMES=99
+    _runner_apply_system() { _failing_system_step; }
+    _runner_apply_flatpak() { _ok_flatpak_step; }
+    _runner_apply_snap() { _runner_status_write snap skipped; return 0; }
+    _runner_ask_retry() { return 0; }
+    RETRY_MAX_ATTEMPTS=2 RETRY_REPORT_AFTER=2
+    run _runner_apply_all
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"nudge · failure report"* ]]
+    [[ "$output" == *"the same update has failed 2 times"* ]]
+    [[ "$output" == *"saved to"* ]]
+    local report
+    report=$(grep '^report=' "$_RUNNER_STATUS" | cut -d= -f2-)
+    [[ -f "$report" && "$(stat -c %a "$report")" == "600" ]]
+    grep -q 'another package manager is running (pid 4321)' "$report"
+    grep -qx 'fails_system=2' "$_RUNNER_STATUS"
+}
+
+@test "_pkgmgr_read_status takes the retry fields and refuses what is not ours" {
+    export NUDGE_STATE_DIR="$TMPDIR_TEST/state"
+    mkdir -p "$NUDGE_STATE_DIR/reports"
+    source "$PROJECT_DIR/lib/retry.sh"
+    local good="$NUDGE_STATE_DIR/reports/failure-20261025-120000.txt"
+    ( umask 077; echo report > "$good" )
+    echo elsewhere > "$TMPDIR_TEST/failure-elsewhere.txt"
+    cat > "$TMPDIR_TEST/status" <<EOF
+system=failed
+attempts=3
+retry_declined=1
+report=$TMPDIR_TEST/failure-elsewhere.txt
+report=$good
+cause_system=lock
+cause_flatpak=Bad Cause
+fails_system=2x
+culprits_system=4321 evil;rm ok-name
+EOF
+    _pkgmgr_read_status "$TMPDIR_TEST/status"
+    [[ "$_UPG_ATTEMPTS" == "3" ]]
+    [[ "$_UPG_RETRY_DECLINED" == "1" ]]
+    [[ "$_UPG_REPORT" == "$good" ]]
+    [[ "${_UPG_CAUSE[system]}" == "lock" ]]
+    [[ -z "${_UPG_CAUSE[flatpak]:-}" ]]
+    [[ "${_UPG_FAILS[system]}" == "2" ]]
+    [[ "${_UPG_CULPRITS[system]}" == "4321 ok-name" ]]
+    printf 'report=%s\n' "$TMPDIR_TEST/failure-elsewhere.txt" > "$TMPDIR_TEST/status2"
+    _UPG_REPORT=""
+    _pkgmgr_read_status "$TMPDIR_TEST/status2"
+    [[ -z "$_UPG_REPORT" ]]
+}
+
+@test "select_list_targets lists every target of a list, ticked or not" {
+    source "$PROJECT_DIR/lib/select.sh"
+    select_reset
+    select_add system standard "vim" vim
+    select_add system security "openssl" openssl
+    select_add snap snap "firefox" firefox
+    select_set system "" 0
+    [[ "$(select_list_targets system | tr '\n' ' ')" == "vim openssl " ]]
+    [[ "$(select_list_targets snap)" == "firefox" ]]
+    [[ -z "$(select_targets system)" ]]
+}

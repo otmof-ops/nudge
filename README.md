@@ -48,6 +48,7 @@ Most Linux update tools are either silent and automatic, locked to one desktop e
 - **Consent-first updates** — never updates without your explicit approval; Update Now, Remind Later, or Not Now
 - **Dialogs with the bunny in them** — the prompt draws the Nudge Bunny in the mood of the moment, the counts, red and amber chips for critical and security updates, and the first package names; kdialog gets rich text, zenity the same in Pango markup
 - **Pick what to update** — after Update Now, one question: everything, critical and security updates only, one source only, the full list first, or pick one by one; picking one by one opens the menu in a terminal window (every source with its subcategories, select-all at each level, single packages), and only what you tick is applied, with `sudo` asking for your password in that window
+- **When an update doesn't go through** — the session reads what the package manager said, names the cause (another package manager holding the lock, an interrupted dpkg, a full disk, a missing repository key, a stale mirror, a package whose install script failed, a snap still running…) and asks whether to try the failed ones again; once the same update has failed twice it writes a failure report with the lines it saw and the commands that might resolve it, in the terminal and in a dialog, and `nudge --failures` shows what keeps failing. nudge never runs those commands for you
 - **Multi-distro support** — auto-detects apt, dnf, pacman, and zypper across Ubuntu, Fedora, Arch, and openSUSE
 - **5 notification backends** — dunstify, kdialog, zenity, gdbus, and notify-send with automatic detection
 - **Flatpak + Snap** — checks universal package stores alongside your system package manager
@@ -83,7 +84,7 @@ installed copy verifies them again on every self-update. To start from a verifie
 one-liner:
 
 ```bash
-git clone --branch v2.2.0 https://github.com/otmof-ops/nudge.git && cd nudge && ./setup.sh --install --defaults
+git clone --branch v2.3.0 https://github.com/otmof-ops/nudge.git && cd nudge && ./setup.sh --install --defaults
 ```
 
 ## How It Works
@@ -102,7 +103,7 @@ write history → exit with the named code (0 under login or timer)
 
 ## Architecture
 
-nudge uses a modular library design — the main script is a ~500-line dispatcher that sources 16 modules from `lib/`:
+nudge uses a modular library design — the main script is a ~550-line dispatcher that sources 18 modules from `lib/`:
 
 | Module | Purpose |
 |--------|---------|
@@ -118,6 +119,7 @@ nudge uses a modular library design — the main script is a ~500-line dispatche
 | `lib/safety.sh` | Pre-upgrade snapshots, reboot detection |
 | `lib/selfupdate.sh` | GitHub release self-update check |
 | `lib/errorreport.sh` | Crash reports and automated GitHub issue filing |
+| `lib/retry.sh` | When an update does not go through: the diagnosis of the captured error output, the ledger of updates that keep failing, the failure report |
 | `lib/tui.sh` | TUI rendering — the palette (truecolor, 256 or 16 colours), frames, menus, the text bunny |
 | `lib/select.sh` | The selection menu — lists, subcategories, select-all, single packages |
 | `lib/bunny-poses.sh` | The mascot — faces and 11 ASCII art poses |
@@ -310,6 +312,14 @@ Edit `~/.config/nudge/nudge.conf`:
 | `SNAPSHOT_ENABLED` | bool | `false` | Snapshot before upgrade |
 | `SNAPSHOT_TOOL` | enum | `auto` | `auto` / `timeshift` / `snapper` / `btrfs` |
 
+### Failed Updates
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `RETRY_ASK` | bool | `true` | After a step fails, ask in the terminal whether to try the failed ones again |
+| `RETRY_MAX_ATTEMPTS` | int | `3` | Attempts a session may make at one step, the first included (1 = never retry) |
+| `RETRY_REPORT_AFTER` | int | `2` | Write the failure report once the same update has failed this many times, counted across sessions (1 = on the first failure) |
+
 ### Self-Update Settings
 
 | Option | Type | Default | Description |
@@ -350,6 +360,9 @@ nudge --validate             # Validate config
 nudge --report               # Show crash reports
 nudge --report --file        # File latest crash as GitHub issue
 nudge --report --clear       # Clear all crash reports
+nudge --failures             # What keeps failing, and the latest failure report
+nudge --failures --json      # The same as JSON
+nudge --failures --clear     # Forget the failing updates, the reports and the captured output
 nudge --migrate              # Run config migration
 ```
 
@@ -380,7 +393,7 @@ With `--json`, nudge emits a single JSON object:
 
 ```json
 {
-  "nudge_version": "2.2.0",
+  "nudge_version": "2.3.0",
   "timestamp": "2026-10-09T09:15:00+08:00",
   "exit_code": 2,
   "exit_reason": "UPDATES_APPLIED",
@@ -450,6 +463,29 @@ Picking one by one opens a terminal window. Everything is ticked to start with; 
 
 With every system package ticked, `UPDATE_COMMAND` runs as configured (a full upgrade). With a subset, only those packages are upgraded (`apt-get install --only-upgrade`, `dnf upgrade`, `zypper update`). Arch never partially upgrades, so on pacman the system list is all or nothing. Flatpak and Snap follow the same rule with `flatpak update` and `snap refresh`. Set `SELECT_UPDATES=false` to skip both the question and the menu and install everything. The terminal picks its palette by what it reports: truecolor, 256 colours, or the basic 16.
 
+## When an Update Doesn't Go Through
+
+Each step's error output is captured as it runs (what you see in the window is unchanged: apt keeps its progress bar, sudo its prompt). When a step fails, the session says what the package manager meant and asks:
+
+```text
+    (\__/)
+    (=o.o=)  some of that didn't go through.
+    (")_(")  sometimes it just needs a second go.
+
+    ✗ System packages · exit 100 · another package manager is running (pid 4321)
+      Only one package manager may run at a time. Just after login it is often the software centre or unattended-upgrades finishing its own run.
+
+    ▶ Try the failed ones again? [Y/n]:
+```
+
+Only the failed steps run again; what went through is left alone. `RETRY_MAX_ATTEMPTS` (default 3) caps the attempts in one session and `RETRY_ASK=false` turns the question off. The causes nudge recognises: a lock held by another package manager (with its pid), an interrupted dpkg, a full disk, a sudo refusal, a repository whose certificate cannot be verified, a missing or expired repository key, a damaged index or a wrong clock, a stale mirror (404), an unreachable repository or no network at all, a package whose own install script failed (the package is named), packages that no longer fit together, a file conflict on Arch, a snap that is still running (the snap is named), snapd busy, a hold, a Flatpak remote that is gone, a Flatpak app that wants a newer Flatpak, a no at the package manager's own question, and Ctrl-C. Anything else is reported in the package manager's own words.
+
+<p align="center"><img src="docs/assets/screenshot-failure.png" alt="Some updates didn't go through: the teary bunny, the system packages failed 3 times because another package manager is running, the firefox snap is still running, Show Report / Close" width="640"></p>
+
+Every failed attempt is counted per update, across sessions, and forgotten the moment the update goes through. Once the same update has failed `RETRY_REPORT_AFTER` times (default 2: a retry that fails again is already the second time) the session writes a **failure report**: what failed, how many times and since when, the cause and what it means, the lines the package manager printed, the commands that might resolve it, and where the captured output is. It is printed in the terminal, saved under `~/.local/share/nudge/reports/`, and offered in a dialog (**Show Report** / **Close**) once the window closes. `nudge --failures` shows the ledger and the latest report at any time; `nudge --failures --clear` forgets it all.
+
+nudge never runs the suggested commands itself. They are the standard remedies (`sudo dpkg --configure -a`, `sudo apt-get install -f`, `sudo apt clean`, `sudo pacman -Sy archlinux-keyring`, `snap changes`, `flatpak repair`…), written down for you to read, decide on and run.
+
 ## The Nudge Bunny
 
 <p align="center"><img src="docs/assets/bunny-moods.svg" alt="the bunny's moods: normal, happy, wide, worried, sleepy, teary, crying" width="100%"></p>
@@ -501,6 +537,10 @@ man ./share/man/nudge.1    # Preview locally
 **The systemd timer never shows a dialog:**
 - The user manager needs the session's display: `systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XAUTHORITY` (KDE and GNOME do this for you). Without a display the run is skipped and recorded as `SKIPPED_NO_DISPLAY` in `nudge --history`.
 
+**An update keeps failing:**
+- `nudge --failures` shows what keeps failing, since when, the cause nudge recognised, and the latest failure report with the commands that might resolve it. The package manager's own output from the failed step is under `~/.local/share/nudge/logs/`.
+- Once the update goes through, nudge forgets it; `nudge --failures --clear` forgets everything at once.
+
 **nudge keeps asking to reboot:**
 - The reboot flag clears itself once the system has rebooted, or when nothing needs a reboot any more. If it persists, `nudge --dry-run --verbose` shows which signal is set.
 
@@ -520,10 +560,10 @@ Contributions are welcome. See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for the c
 
 | Metric | Value |
 |--------|-------|
-| Test suite | 435 tests across 17 files |
-| Library modules | 16 modular `.sh` files |
+| Test suite | 542 tests across 20 files |
+| Library modules | 18 modular `.sh` files |
 | Named exit codes | 13 scriptable exit codes |
-| Config keys | 32 validated keys |
+| Config keys | 35 validated keys |
 | Notification backends | 5 with auto-detection |
 | Package managers | 4 + Flatpak + Snap |
 | Mascot | an SVG character with 7 moods, 11 text poses for terminals |
