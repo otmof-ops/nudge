@@ -345,19 +345,29 @@ pkgmgr_custom_update_command() {
 # --- Terminal emulators nudge knows how to drive ---
 readonly _KNOWN_TERMINALS=" konsole gnome-terminal xfce4-terminal alacritty kitty foot wezterm tilix terminator x-terminal-emulator xterm "
 
-# A known name that resolves to a real program the user cannot modify: the
-# file it points at is owned by root and not writable (a read-only shim of
-# the user's own would otherwise do, and it is where the sudo password is typed)
-# Usage: _terminal_path <name> -> prints the path PATH gave
-_terminal_path() {
-    local name="$1" path real owner
-    [[ " $_KNOWN_TERMINALS " == *" $name "* ]] || return 1
+# A program the user cannot modify: the file PATH gives, followed to the end,
+# is owned by root and not writable (a read-only shim of the user's own would
+# otherwise do). This is the rule for everything that touches the window where
+# the sudo password is typed: the terminal, and whatever wraps it.
+# Usage: _trusted_program_path <name> [resolved] -> prints the path PATH gave,
+# or with "resolved" the file it points at (so a link in a user-writable PATH
+# directory cannot be re-pointed between this check and the exec)
+_trusted_program_path() {
+    local name="$1" want="${2:-path}" path real owner
     path=$(type -P "$name" 2>/dev/null) || return 1
     [[ -n "$path" ]] || return 1
     real=$(readlink -f "$path" 2>/dev/null) || return 1
     owner=$(stat -c %u "$real" 2>/dev/null) || return 1
     [[ -n "$real" && -x "$real" && "$owner" == "0" && ! -w "$real" ]] || return 1
-    printf '%s' "$path"
+    if [[ "$want" == "resolved" ]]; then printf '%s' "$real"; else printf '%s' "$path"; fi
+}
+
+# A known terminal name that passes that rule
+# Usage: _terminal_path <name> -> prints the path PATH gave
+_terminal_path() {
+    local name="$1"
+    [[ " $_KNOWN_TERMINALS " == *" $name "* ]] || return 1
+    _trusted_program_path "$name"
 }
 
 # --- Detect terminal emulator (prints the name) ---
@@ -629,25 +639,22 @@ _terminal_desktop_id() {
     esac
 }
 
-# systemd-run, held to the terminal's rule: the program that wraps the window
-# where the sudo password is typed must be root's, not a shim of the user's
+# systemd-run, held to the terminal's rule (the program that wraps the window
+# where the sudo password is typed), and taken as the file it resolves to
 # Usage: _pkgmgr_systemd_run_path -> prints the path, or fails
 _pkgmgr_systemd_run_path() {
-    local path real owner
-    path=$(type -P systemd-run 2>/dev/null) || return 1
-    [[ -n "$path" ]] || return 1
-    real=$(readlink -f "$path" 2>/dev/null) || return 1
-    owner=$(stat -c %u "$real" 2>/dev/null) || return 1
-    [[ -n "$real" && -x "$real" && "$owner" == "0" && ! -w "$real" ]] || return 1
-    printf '%s' "$path"
+    _trusted_program_path systemd-run resolved
 }
 
-# 0 when a systemd user manager will make a scope for us (proved by making one)
+# 0 when a systemd user manager will make a scope for us (proved by making one;
+# a manager that is up but not answering is given ten seconds, not sd-bus's 25)
 # Usage: _pkgmgr_scope_available <systemd-run path>
 _pkgmgr_scope_available() {
     local run="$1"
+    local -a limit=()
     [[ -d /run/systemd/system ]] || return 1
-    "$run" --user --scope --quiet --collect "--unit=nudge-probe-$$-${RANDOM}.scope" -- true >/dev/null 2>&1
+    command -v timeout >/dev/null 2>&1 && limit=(timeout 10)
+    "${limit[@]}" "$run" --user --scope --quiet --collect "--unit=nudge-probe-$$-${RANDOM}.scope" -- true >/dev/null 2>&1
 }
 
 # The words that put a command into its own scope, or none
@@ -660,8 +667,9 @@ _pkgmgr_scope_words() {
     _pkgmgr_scope_available "$run" || return 0
     id=$(_terminal_desktop_id "$term" "$path")
     [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || id="$term"
+    id="${id//-/\\x2d}"   # a dash inside the id is written the way systemd writes it (plasma\x2dsystemmonitor)
     hex=$(od -An -tx1 -N16 /dev/urandom 2>/dev/null | tr -d ' \n')
-    [[ "$hex" =~ ^[0-9a-f]{32}$ ]] || hex=$(printf '%x%x%x%x' "$(date +%s)" "$$" "$RANDOM" "$RANDOM")
+    [[ "$hex" =~ ^[0-9a-f]{32}$ ]] || hex=$(printf '%08x%08x%08x%08x' "$(date +%s)" "$$" "$((RANDOM << 15 | RANDOM))" "$((RANDOM << 15 | RANDOM))")
     _scope_out=("$run" --user --scope --quiet --collect
                 "--unit=app-${id}-${hex}.scope"
                 "--description=${term} (nudge update session)" --)
@@ -759,11 +767,13 @@ _pkgmgr_read_status() {
     return 0
 }
 
-# A pid that is a nudge runner, alive
+# A pid that is a nudge runner, alive (its command line carries --_run-upgrade)
 _pkgmgr_runner_alive() {
     local pid="$1"
+    local -a words=()
     [[ "$pid" =~ ^[1-9][0-9]{0,9}$ ]] || return 1
-    grep -qa -- '--_run-upgrade' "/proc/$pid/cmdline" 2>/dev/null
+    mapfile -d '' -t words < "/proc/$pid/cmdline" 2>/dev/null || return 1
+    [[ " ${words[*]} " == *" --_run-upgrade "* ]]
 }
 
 # The last pid= and done= lines of a status file, into _PKGMGR_ST_PID / _PKGMGR_ST_DONE
@@ -790,24 +800,36 @@ _pkgmgr_status_progress() {
 # for "Press Enter to close"; the wait follows the runner's process out, for
 # a bounded time, so the summary comes after the window rather than over it.
 _pkgmgr_wait_session() {
-    local status_file="$1" term_pid="${2:-}" waited=0
+    local status_file="$1" term_pid="${2:-}" waited=0 held=0 term_rc=""
     local max_wait="${NUDGE_SESSION_MAX_WAIT:-21600}"   # 6 hours
     local hold_wait="${NUDGE_SESSION_HOLD_WAIT:-300}"   # 5 minutes after done
+    [[ "$max_wait" =~ ^[0-9]+$ ]] && max_wait=$((10#$max_wait)) || max_wait=21600
+    [[ "$hold_wait" =~ ^[0-9]+$ ]] && hold_wait=$((10#$hold_wait)) || hold_wait=300
     while [[ "$waited" -lt "$max_wait" ]]; do
         _pkgmgr_status_progress "$status_file"
         if [[ -n "$_PKGMGR_ST_DONE" ]]; then
-            waited=0
-            while [[ "$waited" -lt "$hold_wait" ]] && _pkgmgr_runner_alive "$_PKGMGR_ST_PID"; do
+            while [[ "$held" -lt "$hold_wait" ]] && _pkgmgr_runner_alive "$_PKGMGR_ST_PID"; do
                 sleep 1
-                waited=$((waited + 1))
+                held=$((held + 1))
             done
             return 0
         fi
         if [[ -n "$_PKGMGR_ST_PID" ]]; then
-            # The pid must be a real nudge runner, or the file is lying
-            _pkgmgr_runner_alive "$_PKGMGR_ST_PID" || return 1   # runner died without finishing (or the file is not ours)
-        elif [[ -n "$term_pid" && "$waited" -ge 5 ]] && ! kill -0 "$term_pid" 2>/dev/null; then
-            return 1       # the terminal is gone and started no runner
+            if ! _pkgmgr_runner_alive "$_PKGMGR_ST_PID"; then
+                # done= is written before the runner exits: it may have finished between the read above and this check
+                _pkgmgr_status_progress "$status_file"
+                [[ -n "$_PKGMGR_ST_DONE" ]] && return 0
+                return 1   # runner died without finishing (or the file is not ours)
+            fi
+        elif [[ -z "$term_rc" && -n "$term_pid" ]] && ! kill -0 "$term_pid" 2>/dev/null; then
+            # The terminal is gone and no runner has reported. A failure (systemd-run
+            # refused, the exec failed, a crash) is final; exit 0 means it handed the
+            # command to an instance already running, which may still be opening the
+            # window, so the wait goes on to the limit below. The status is read once:
+            # bash keeps it for a reaped child, and a second wait would not have it.
+            term_rc=0
+            wait "$term_pid" 2>/dev/null || term_rc=$?
+            [[ "$term_rc" -eq 0 ]] || return 1
         elif [[ "$waited" -ge 60 ]]; then
             return 1       # terminal never started the runner
         fi
@@ -869,7 +891,11 @@ pkgmgr_upgrade() {
     ( umask 077; : > "$status_file" ) || return 1
 
     log_info "Opening the upgrade session in $term"
-    _pkgmgr_launch_terminal "$term" "$self" "$sess" 2>/dev/null || true
+    if ! _pkgmgr_launch_terminal "$term" "$self" "$sess" 2>/dev/null; then
+        log_error "Could not open $term for the upgrade session"
+        rm -f "$sess" "$status_file" 2>/dev/null || true
+        return 1
+    fi
 
     local rc=0
     if ! _pkgmgr_wait_session "$status_file" "$_PKGMGR_TERM_PID"; then

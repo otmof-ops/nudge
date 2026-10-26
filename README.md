@@ -14,7 +14,7 @@
 
 **A gentle nudge to keep your system fresh.**
 
-Lightweight Linux desktop update manager that checks for available packages after login, asks if you'd like to update, and then lets you pick exactly what: every list of updates (system packages, Flatpak, Snap) with its subcategories, select-all at each level, or single packages. Supports multiple distributions and package managers (apt, dnf, pacman, zypper), 5 notification backends, Flatpak and Snap stores, scheduling with deferral, pre-upgrade snapshots, and a friendly bunny mascot. Pure bash. Zero compiled dependencies. 563 tests.
+Lightweight Linux desktop update manager that checks for available packages after login, asks if you'd like to update, and then lets you pick exactly what: every list of updates (system packages, Flatpak, Snap) with its subcategories, select-all at each level, or single packages. Supports multiple distributions and package managers (apt, dnf, pacman, zypper), 5 notification backends, Flatpak and Snap stores, scheduling with deferral, pre-upgrade snapshots, and a friendly bunny mascot. Pure bash. Zero compiled dependencies. 566 tests.
 
 ## Beta Testing
 
@@ -565,7 +565,7 @@ Contributions are welcome. See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for the c
 
 | Metric | Value |
 |--------|-------|
-| Test suite | 563 tests across 20 files |
+| Test suite | 566 tests across 20 files |
 | Library modules | 18 modular `.sh` files |
 | Named exit codes | 13 scriptable exit codes |
 | Config keys | 35 validated keys |

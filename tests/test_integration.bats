@@ -9,6 +9,7 @@ setup() {
     TEST_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
     PROJECT_DIR="$(dirname "$TEST_DIR")"
     NUDGE="$PROJECT_DIR/nudge.sh"
+    unset _NUDGE_TRIGGER   # a shell opened in a window nudge started used to carry it
 }
 
 teardown() {
