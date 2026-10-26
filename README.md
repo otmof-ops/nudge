@@ -14,7 +14,7 @@
 
 **A gentle nudge to keep your system fresh.**
 
-Lightweight Linux desktop update manager that checks for available packages after login, asks if you'd like to update, and then lets you pick exactly what: every list of updates (system packages, Flatpak, Snap) with its subcategories, select-all at each level, or single packages. Supports multiple distributions and package managers (apt, dnf, pacman, zypper), 5 notification backends, Flatpak and Snap stores, scheduling with deferral, pre-upgrade snapshots, and a friendly bunny mascot. Pure bash. Zero compiled dependencies. 435 tests.
+Lightweight Linux desktop update manager that checks for available packages after login, asks if you'd like to update, and then lets you pick exactly what: every list of updates (system packages, Flatpak, Snap) with its subcategories, select-all at each level, or single packages. Supports multiple distributions and package managers (apt, dnf, pacman, zypper), 5 notification backends, Flatpak and Snap stores, scheduling with deferral, pre-upgrade snapshots, and a friendly bunny mascot. Pure bash. Zero compiled dependencies. 566 tests.
 
 ## Beta Testing
 
@@ -84,7 +84,7 @@ installed copy verifies them again on every self-update. To start from a verifie
 one-liner:
 
 ```bash
-git clone --branch v2.3.0 https://github.com/otmof-ops/nudge.git && cd nudge && ./setup.sh --install --defaults
+git clone --branch v2.3.1 https://github.com/otmof-ops/nudge.git && cd nudge && ./setup.sh --install --defaults
 ```
 
 ## How It Works
@@ -100,6 +100,8 @@ upgrades (system, Flatpak, Snap) → reboot check |
 "Remind Me Later": when? (in an hour, tomorrow…) | "Not Now": exit →
 write history → exit with the named code (0 under login or timer)
 ```
+
+The terminal window is its own: nudge starts it in a transient systemd scope named like any application the desktop launches (`app-org.kde.konsole-<id>.scope` for Konsole), so the system monitor charges the window and whatever you open in it to the terminal, not to nudge. nudge follows the session through the status file the runner writes and is finished shortly after the session ends, whether or not the window stays open.
 
 ## Architecture
 
@@ -393,7 +395,7 @@ With `--json`, nudge emits a single JSON object:
 
 ```json
 {
-  "nudge_version": "2.3.0",
+  "nudge_version": "2.3.1",
   "timestamp": "2026-10-09T09:15:00+08:00",
   "exit_code": 2,
   "exit_reason": "UPDATES_APPLIED",
@@ -537,6 +539,9 @@ man ./share/man/nudge.1    # Preview locally
 **The systemd timer never shows a dialog:**
 - The user manager needs the session's display: `systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XAUTHORITY` (KDE and GNOME do this for you). Without a display the run is skipped and recorded as `SKIPPED_NO_DISPLAY` in `nudge --history`.
 
+**The system monitor shows nudge using gigabytes, or the autostart service never stops:**
+- Before 2.3.1, the update window and every tab you opened in it were counted against "Nudge Update Checker", and nudge waited for the window to close. Since 2.3.1 the window lives in its own scope and nudge finishes when the session does; the tabs you keep open show under the terminal's name. A run started before the upgrade still waits for its window: close that window once, or log in again.
+
 **An update keeps failing:**
 - `nudge --failures` shows what keeps failing, since when, the cause nudge recognised, and the latest failure report with the commands that might resolve it. The package manager's own output from the failed step is under `~/.local/share/nudge/logs/`.
 - Once the update goes through, nudge forgets it; `nudge --failures --clear` forgets everything at once.
@@ -560,7 +565,7 @@ Contributions are welcome. See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for the c
 
 | Metric | Value |
 |--------|-------|
-| Test suite | 542 tests across 20 files |
+| Test suite | 566 tests across 20 files |
 | Library modules | 18 modular `.sh` files |
 | Named exit codes | 13 scriptable exit codes |
 | Config keys | 35 validated keys |

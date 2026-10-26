@@ -9,23 +9,24 @@ setup() {
     TEST_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
     PROJECT_DIR="$(dirname "$TEST_DIR")"
     NUDGE="$PROJECT_DIR/nudge.sh"
+    unset _NUDGE_TRIGGER   # a shell opened in a window nudge started used to carry it
 }
 
 teardown() {
     [[ -n "${_INTEGRATION_TMPDIR:-}" ]] && rm -rf "$_INTEGRATION_TMPDIR" || true
 }
 
-@test "nudge --version prints 2.3.0" {
+@test "nudge --version prints 2.3.1" {
     run "$NUDGE" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge 2.3.0" ]]
+    [[ "$output" == "nudge 2.3.1" ]]
 }
 
 @test "nudge --help prints usage with bunny mascot" {
     run "$NUDGE" --help
     [[ "$status" -eq 0 ]]
     [[ "$output" == *'(\__/)'* ]]
-    [[ "$output" == *"nudge 2.3.0"* ]]
+    [[ "$output" == *"nudge 2.3.1"* ]]
     [[ "$output" == *"Usage:"* ]]
     [[ "$output" == *"--dry-run"* ]]
     [[ "$output" == *"--json"* ]]
@@ -75,7 +76,7 @@ teardown() {
 @test "install.sh --version prints version via setup.sh" {
     run "$PROJECT_DIR/install.sh" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge setup 2.3.0" ]]
+    [[ "$output" == "nudge setup 2.3.1" ]]
 }
 
 @test "install.sh --help shows setup.sh flags" {
@@ -262,7 +263,7 @@ _integration_terminal() {
     cp "$PROJECT_DIR"/lib/*.sh "$prefix/.local/lib/nudge/"
     run env -u NUDGE_LIB_DIR HOME="$_INTEGRATION_TMPDIR/elsewhere" "$prefix/.local/bin/nudge.sh" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge 2.3.0" ]]
+    [[ "$output" == "nudge 2.3.1" ]]
 }
 
 @test "flags that need a value or a parent flag are usage errors, not silent runs" {

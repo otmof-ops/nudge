@@ -4,6 +4,8 @@
 
 bats_require_minimum_version 1.5.0
 # Tests for lib/pkgmgr.sh — package manager abstraction
+# A background helper must close fd 3 (3>&-) and must not hold the test's stdout,
+# or bats waits for it at the end of the file.
 
 setup() {
     TEST_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
@@ -821,4 +823,286 @@ EOF
     [[ "$(select_list_targets system | tr '\n' ' ')" == "vim openssl " ]]
     [[ "$(select_list_targets snap)" == "firefox" ]]
     [[ -z "$(select_targets system)" ]]
+}
+
+# --- The terminal's own scope and the session wait (2.3.1) ---
+
+# A systemd-run that records its arguments and runs the command after --
+# (the root-owned rule has its own test; the mocks stand in through the seam)
+_mock_systemd_run() {
+    cat > "$MOCK_BIN/systemd-run" <<EOT
+#!/bin/bash
+printf '%s\n' "\$@" >> "$TMPDIR_TEST/systemd-run.log"
+while [[ \$# -gt 0 && "\$1" != "--" ]]; do shift; done
+shift
+exec "\$@"
+EOT
+    chmod +x "$MOCK_BIN/systemd-run"
+    _pkgmgr_systemd_run_path() { echo "$MOCK_BIN/systemd-run"; }
+}
+
+# A process that passes for a runner (its command line carries --_run-upgrade) for a while;
+# two commands, or bash would exec straight into sleep and the marker would be gone
+_fake_runner() {
+    bash -c 'sleep "$1"; :' --_run-upgrade "$1" >/dev/null 2>&1 3>&- &
+    echo $!
+}
+
+# End a background helper and whatever it is sleeping in
+_stop() {
+    pkill -P "$1" 2>/dev/null || true
+    kill "$1" 2>/dev/null || true
+}
+
+@test "_terminal_desktop_id names the desktop file of each terminal, and follows the alternatives link" {
+    [[ "$(_terminal_desktop_id konsole /usr/bin/konsole)" == "org.kde.konsole" ]]
+    [[ "$(_terminal_desktop_id gnome-terminal /usr/bin/gnome-terminal)" == "org.gnome.Terminal" ]]
+    [[ "$(_terminal_desktop_id alacritty /usr/bin/alacritty)" == "Alacritty" ]]
+    [[ "$(_terminal_desktop_id tilix /usr/bin/tilix)" == "com.gexperts.Tilix" ]]
+    [[ "$(_terminal_desktop_id wezterm /usr/bin/wezterm)" == "org.wezfurlong.wezterm" ]]
+    [[ "$(_terminal_desktop_id kitty /usr/bin/kitty)" == "kitty" ]]
+    [[ "$(_terminal_desktop_id xfce4-terminal /usr/bin/xfce4-terminal)" == "xfce4-terminal" ]]
+    mkdir -p "$TMPDIR_TEST/alt"
+    printf '#!/bin/bash\n' > "$TMPDIR_TEST/alt/konsole"
+    ln -s "$TMPDIR_TEST/alt/konsole" "$TMPDIR_TEST/alt/x-terminal-emulator"
+    [[ "$(_terminal_desktop_id x-terminal-emulator "$TMPDIR_TEST/alt/x-terminal-emulator")" == "org.kde.konsole" ]]
+    printf '#!/bin/bash\n' > "$TMPDIR_TEST/alt/gnome-terminal.wrapper"
+    ln -sf "$TMPDIR_TEST/alt/gnome-terminal.wrapper" "$TMPDIR_TEST/alt/x-terminal-emulator"
+    [[ "$(_terminal_desktop_id x-terminal-emulator "$TMPDIR_TEST/alt/x-terminal-emulator")" == "gnome-terminal.wrapper" ]]
+}
+
+@test "_trusted_program_path refuses the user's files and, asked for the resolved file, skips the user's links" {
+    printf '#!/bin/bash\n' > "$MOCK_BIN/systemd-run"; chmod +x "$MOCK_BIN/systemd-run"
+    PATH="$MOCK_BIN:$PATH"
+    run ! _trusted_program_path systemd-run
+    run ! _pkgmgr_systemd_run_path
+    local -a words=(stale)
+    _pkgmgr_scope_words words konsole /usr/bin/konsole
+    [[ "${#words[@]}" -eq 0 ]]
+    rm -f "$MOCK_BIN/systemd-run"
+    ln -s /usr/bin/env "$MOCK_BIN/systemd-run"          # the user's own link to root's program
+    [[ "$(_trusted_program_path systemd-run)" == "$MOCK_BIN/systemd-run" ]]
+    [[ "$(_pkgmgr_systemd_run_path)" == "$(readlink -f /usr/bin/env)" ]]   # the file itself, never the link
+}
+
+_scope_unit_of() {
+    local w
+    for w in "$@"; do [[ "$w" == --unit=* ]] && printf '%s' "${w#--unit=}"; done
+}
+
+@test "_pkgmgr_scope_words names an application scope the way the desktop does" {
+    _mock_systemd_run
+    _pkgmgr_scope_available() { return 0; }
+    PATH="$MOCK_BIN:$PATH"
+    local -a words=()
+    _pkgmgr_scope_words words konsole /usr/bin/konsole
+    [[ "${words[0]}" == "$MOCK_BIN/systemd-run" ]]
+    [[ "${words[*]}" == *"--user --scope --quiet --collect"* ]]
+    [[ "$(_scope_unit_of "${words[@]}")" =~ ^app-org\.kde\.konsole-[0-9a-f]{32}\.scope$ ]]
+    [[ "${words[*]}" == *"--description=konsole (nudge update session)"* ]]
+    [[ "${words[-1]}" == "--" ]]
+    # a dash inside the id is written the way systemd writes it
+    _pkgmgr_scope_words words xfce4-terminal /usr/bin/xfce4-terminal
+    [[ "$(_scope_unit_of "${words[@]}")" =~ ^app-xfce4\\x2dterminal-[0-9a-f]{32}\.scope$ ]]
+    [[ "${words[*]}" == *"--description=xfce4-terminal (nudge update session)"* ]]
+}
+
+@test "the scope is proved by making one before the terminal is put in it" {
+    [[ -d /run/systemd/system ]] || skip "no systemd on this machine"
+    _mock_systemd_run
+    PATH="$MOCK_BIN:$PATH"
+    local -a words=()
+    _pkgmgr_scope_words words konsole /usr/bin/konsole
+    [[ "${#words[@]}" -gt 0 ]]
+    grep -q -- '--unit=nudge-probe-' "$TMPDIR_TEST/systemd-run.log"
+    grep -qx -- 'true' "$TMPDIR_TEST/systemd-run.log"
+}
+
+@test "_pkgmgr_scope_words gives no words when no user manager answers" {
+    printf '#!/bin/bash\nexit 1\n' > "$MOCK_BIN/systemd-run"; chmod +x "$MOCK_BIN/systemd-run"
+    PATH="$MOCK_BIN:$PATH"
+    _pkgmgr_systemd_run_path() { echo "$MOCK_BIN/systemd-run"; }
+    local -a words=(stale)
+    _pkgmgr_scope_words words konsole /usr/bin/konsole
+    [[ "${#words[@]}" -eq 0 ]]
+}
+
+@test "_pkgmgr_launch_terminal starts the terminal in the background, inside the scope, without nudge's lock or trigger" {
+    _mock_systemd_run
+    cat > "$MOCK_BIN/konsole" <<EOT
+#!/bin/bash
+printf '%s\n' "\$@" > "$TMPDIR_TEST/konsole.argv"
+{ echo "trigger=\${_NUDGE_TRIGGER-unset}"; readlink /proc/\$\$/fd/*; } > "$TMPDIR_TEST/konsole.env.tmp"
+mv "$TMPDIR_TEST/konsole.env.tmp" "$TMPDIR_TEST/konsole.env"
+exec sleep 30 >/dev/null 2>&1 3>&-
+EOT
+    chmod +x "$MOCK_BIN/konsole"
+    PATH="$MOCK_BIN:$PATH"
+    _terminal_path() { echo "$MOCK_BIN/konsole"; }   # the root-owned rule has its own tests
+    export _NUDGE_TRIGGER=login
+    exec {LOCK_FD}>>"$TMPDIR_TEST/the.lock"
+    _pkgmgr_launch_terminal konsole /opt/nudge.sh /tmp/sess
+    [[ "$_PKGMGR_TERM_PID" =~ ^[0-9]+$ ]]
+    kill -0 "$_PKGMGR_TERM_PID"
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10; do [[ -s "$TMPDIR_TEST/konsole.env" ]] && break; sleep 0.2; done
+    [[ "$(cat "$TMPDIR_TEST/konsole.argv")" == $'-e\nbash\n/opt/nudge.sh\n--_run-upgrade\n/tmp/sess' ]]
+    grep -qx 'trigger=unset' "$TMPDIR_TEST/konsole.env"
+    run ! grep -q 'the.lock' "$TMPDIR_TEST/konsole.env"
+    readlink "/proc/$$/fd/$LOCK_FD" | grep -q 'the.lock'   # ours is still open
+    if [[ -d /run/systemd/system ]]; then
+        grep -q -- '--unit=app-org.kde.konsole-' "$TMPDIR_TEST/systemd-run.log"
+    fi
+    kill "$_PKGMGR_TERM_PID" 2>/dev/null || true
+    exec {LOCK_FD}>&-
+}
+
+@test "_pkgmgr_launch_terminal is as happy with no lock and no trigger to drop" {
+    cat > "$MOCK_BIN/konsole" <<EOT
+#!/bin/bash
+printf '%s\n' "\$@" > "$TMPDIR_TEST/konsole.argv"
+exec sleep 30 >/dev/null 2>&1 3>&-
+EOT
+    chmod +x "$MOCK_BIN/konsole"
+    _terminal_path() { echo "$MOCK_BIN/konsole"; }
+    _pkgmgr_systemd_run_path() { return 1; }
+    unset _NUDGE_TRIGGER LOCK_FD
+    _pkgmgr_launch_terminal konsole /opt/nudge.sh /tmp/sess
+    kill -0 "$_PKGMGR_TERM_PID"
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10; do [[ -s "$TMPDIR_TEST/konsole.argv" ]] && break; sleep 0.2; done
+    [[ "$(cat "$TMPDIR_TEST/konsole.argv")" == $'-e\nbash\n/opt/nudge.sh\n--_run-upgrade\n/tmp/sess' ]]
+    kill "$_PKGMGR_TERM_PID" 2>/dev/null || true
+}
+
+@test "_pkgmgr_wait_session ends with the runner, not with the window" {
+    local st="$TMPDIR_TEST/status" runner window
+    runner=$(_fake_runner 2)
+    sleep 30 >/dev/null 2>&1 3>&- &
+    window=$!
+    printf 'pid=%s\ndone=1\n' "$runner" > "$st"
+    local t0=$SECONDS
+    _pkgmgr_wait_session "$st" "$window"
+    [[ $((SECONDS - t0)) -ge 1 && $((SECONDS - t0)) -le 6 ]]   # it followed the runner out
+    run ! _pkgmgr_runner_alive "$runner"
+    kill -0 "$window"            # the window is still open; nudge did not wait for it
+    kill "$window" 2>/dev/null || true
+    _stop "$runner"
+}
+
+@test "_pkgmgr_wait_session gives the hold a bounded time once the runner reported done" {
+    local st="$TMPDIR_TEST/status" runner
+    runner=$(_fake_runner 20)
+    printf 'pid=%s\ndone=1\n' "$runner" > "$st"
+    local t0=$SECONDS
+    NUDGE_SESSION_HOLD_WAIT=2 _pkgmgr_wait_session "$st"
+    [[ $((SECONDS - t0)) -ge 1 && $((SECONDS - t0)) -le 5 ]]
+    kill -0 "$runner"
+    _stop "$runner"
+}
+
+@test "_pkgmgr_wait_session fails at once when the terminal failed, and keeps waiting when it handed the command on" {
+    local st="$TMPDIR_TEST/status" gone rc late
+    : > "$st"
+    ( exit 3 ) &
+    gone=$!
+    local t0=$SECONDS
+    rc=0
+    _pkgmgr_wait_session "$st" "$gone" || rc=$?
+    [[ "$rc" -eq 1 && $((SECONDS - t0)) -le 3 ]]
+    # exit 0 is a hand-off to an instance already running: the runner may still be coming
+    ( exit 0 ) &
+    gone=$!
+    ( sleep 3; printf 'pid=%s\ndone=1\n' "$(_fake_runner 1)" >> "$st" ) >/dev/null 2>&1 3>&- &
+    late=$!
+    t0=$SECONDS
+    _pkgmgr_wait_session "$st" "$gone"
+    [[ $((SECONDS - t0)) -ge 3 && $((SECONDS - t0)) -le 8 ]]
+    wait "$late" 2>/dev/null || true
+}
+
+@test "_pkgmgr_wait_session reads once more before calling a vanished runner a failure" {
+    local st="$TMPDIR_TEST/status" runner
+    runner=$(_fake_runner 20)
+    printf 'pid=%s\n' "$runner" > "$st"
+    # the runner finishes and goes in the gap between the status read and the alive check
+    eval "$(declare -f _pkgmgr_status_progress | sed '1s/.*/_pkgmgr_status_progress_real ()/')"
+    _pkgmgr_status_progress() {
+        _pkgmgr_status_progress_real "$1"
+        if [[ -z "${_RACE_DONE:-}" && -z "$_PKGMGR_ST_DONE" ]]; then
+            _RACE_DONE=1
+            printf 'done=1\n' >> "$1"
+            _stop "$runner"
+            sleep 0.3
+        fi
+    }
+    _pkgmgr_wait_session "$st"
+    [[ -n "$_RACE_DONE" ]]
+}
+
+@test "_pkgmgr_sweep_sessions removes hour-old session files whose runner is gone and keeps the rest" {
+    export NUDGE_STATE_DIR="$TMPDIR_TEST/state"
+    mkdir -p "$NUDGE_STATE_DIR"
+    local runner
+    runner=$(_fake_runner 5)
+    printf 'pkgmgr=apt\n' > "$NUDGE_STATE_DIR/upgrade-session.AAAAAA"
+    printf 'pid=2147483647\ndone=1\n' > "$NUDGE_STATE_DIR/upgrade-session.AAAAAA.status"
+    printf 'pkgmgr=apt\n' > "$NUDGE_STATE_DIR/upgrade-session.BBBBBB"
+    printf 'pid=%s\n' "$runner" > "$NUDGE_STATE_DIR/upgrade-session.BBBBBB.status"
+    printf 'pkgmgr=apt\n' > "$NUDGE_STATE_DIR/upgrade-session.CCCCCC"
+    : > "$NUDGE_STATE_DIR/upgrade-session.CCCCCC.status"
+    printf 'done=1\n' > "$NUDGE_STATE_DIR/upgrade-session.DDDDDD.status"
+    printf 'pkgmgr=apt\n' > "$NUDGE_STATE_DIR/upgrade-session.EEEEEE"
+    printf 'pid=2147483647\n' > "$NUDGE_STATE_DIR/upgrade-session.EEEEEE.status"
+    printf 'pid=%s\n' "$runner" > "$NUDGE_STATE_DIR/upgrade-session.FFFFFF.status"
+    touch -d '2 hours ago' "$NUDGE_STATE_DIR"/upgrade-session.AAAAAA* "$NUDGE_STATE_DIR"/upgrade-session.BBBBBB* \
+        "$NUDGE_STATE_DIR/upgrade-session.DDDDDD.status" "$NUDGE_STATE_DIR/upgrade-session.EEEEEE" "$NUDGE_STATE_DIR/upgrade-session.FFFFFF.status"
+    printf 'x\n' > "$NUDGE_STATE_DIR/failures.tsv"
+    _pkgmgr_sweep_sessions
+    [[ ! -e "$NUDGE_STATE_DIR/upgrade-session.AAAAAA" && ! -e "$NUDGE_STATE_DIR/upgrade-session.AAAAAA.status" ]]
+    [[ -e "$NUDGE_STATE_DIR/upgrade-session.BBBBBB" && -e "$NUDGE_STATE_DIR/upgrade-session.BBBBBB.status" ]]   # its runner is alive
+    [[ -e "$NUDGE_STATE_DIR/upgrade-session.CCCCCC" && -e "$NUDGE_STATE_DIR/upgrade-session.CCCCCC.status" ]]   # fresh
+    [[ ! -e "$NUDGE_STATE_DIR/upgrade-session.DDDDDD.status" ]]
+    [[ ! -e "$NUDGE_STATE_DIR/upgrade-session.EEEEEE" && ! -e "$NUDGE_STATE_DIR/upgrade-session.EEEEEE.status" ]]   # old session, fresh status, no runner
+    [[ -e "$NUDGE_STATE_DIR/upgrade-session.FFFFFF.status" ]]   # a status on its own whose runner is alive
+    [[ -e "$NUDGE_STATE_DIR/failures.tsv" ]]
+    _stop "$runner"
+}
+
+@test "pkgmgr_upgrade comes back when the session ends, although the window stays open" {
+    export NUDGE_STATE_DIR="$TMPDIR_TEST/state"
+    mkdir -p "$NUDGE_STATE_DIR"
+    # the runner: reports, finishes, goes
+    cat > "$TMPDIR_TEST/fake-nudge.sh" <<'EOT'
+#!/bin/bash
+st="$2.status"
+printf 'pid=%s\n' "$$" >> "$st"
+sleep 1
+printf 'system=ok\nselected_system=2\ntotal_system=2\nflatpak=skipped\nsnap=skipped\ndone=1\n' >> "$st"
+EOT
+    chmod +x "$TMPDIR_TEST/fake-nudge.sh"
+    # the window: runs the command, then stays open, as a window with another tab does
+    cat > "$MOCK_BIN/konsole" <<EOT
+#!/bin/bash
+shift
+"\$@" >/dev/null 2>&1 3>&- &
+exec sleep 30 >/dev/null 2>&1 3>&-
+EOT
+    chmod +x "$MOCK_BIN/konsole"
+    _pkgmgr_systemd_run_path() { return 1; }   # no scope here: the wait is what this test is about
+    PATH="$MOCK_BIN:$PATH"
+    _detect_terminal() { echo konsole; }
+    _terminal_path() { echo "$MOCK_BIN/konsole"; }
+    NUDGE_SELF="$TMPDIR_TEST/fake-nudge.sh"
+    DETECTED_PKGMGR="apt"; _PKG_NATIVE_ARCH="amd64"
+    PKG_UPDATE_LIST="vim|1|2|STANDARD|amd64|0"; PKG_FLATPAK_LIST=""; PKG_SNAP_LIST=""
+    printf 'pkgmgr=apt\n' > "$NUDGE_STATE_DIR/upgrade-session.OLDOLD"   # left behind by an earlier run
+    touch -d '2 hours ago' "$NUDGE_STATE_DIR/upgrade-session.OLDOLD"
+    local t0=$SECONDS
+    pkgmgr_upgrade all
+    [[ $((SECONDS - t0)) -le 8 ]]
+    [[ "$_UPG_SYSTEM" == "ok" && "$_UPG_SELECTED_SYSTEM" -eq 2 ]]
+    kill -0 "$_PKGMGR_TERM_PID"      # the window is still open
+    [[ -z "$(ls "$NUDGE_STATE_DIR"/upgrade-session.* 2>/dev/null)" ]]   # the session files are gone, the orphan with them
+    kill "$_PKGMGR_TERM_PID" 2>/dev/null || true
 }

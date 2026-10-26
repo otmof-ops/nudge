@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1] — 2026-10-26
+
+The update window is its own, and nudge ends when the session does.
+
+### Fixed
+- **nudge no longer waits for the window to close.** The session's terminal
+  was started in the foreground, and Konsole, like most terminals, returns
+  when its window closes, not when the command in it ends. A window kept open
+  (another tab, work started in it) kept nudge waiting for hours after the
+  updates were done: its summary, its history row and its exit came only when
+  the last tab closed, and a logout meanwhile left the session files behind.
+  The terminal now starts in the background; nudge follows the runner's status
+  file and then the runner's own process out of its "Press Enter to close",
+  and is finished within five minutes of the session's end at the latest,
+  whatever the window does. Session files a run left behind are swept once
+  they are an hour old and their runner is gone. Because the window now
+  outlives nudge, it no longer carries what is nudge's: the instance lock's
+  descriptor (a shell opened in that window held the lock, and the next run
+  would have stepped aside) and the login trigger variable (a `nudge` typed
+  in that window would have exited like a login run).
+- **The window is charged to the terminal, not to nudge.** Started from the
+  autostart service, the terminal and everything opened in it (every tab, and
+  everything run in those tabs) lived in the service's cgroup: the system
+  monitor showed it all as "Nudge Update Checker", gigabytes of it when the
+  tabs ran heavy things, and the service stayed "running" until the window
+  closed. The terminal is now started in a transient scope of its own, named
+  the way the desktop names an application it launched
+  (`app-org.kde.konsole-<id>.scope` for Konsole), so the monitor shows the
+  window under the terminal's name and the service ends with nudge. Where
+  there is no systemd user manager the terminal is started as before.
+
 ## [2.3.0] — 2026-10-25
 
 When an update does not go through: a second go, and a report when it keeps
