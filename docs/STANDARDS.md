@@ -420,6 +420,7 @@ source "$NUDGE_LIB_DIR/dialog.sh"           # 18. Depends on notify, retry, the 
 | `PKG_UPDATES_*` | `pkgmgr.sh` | `pkgmgr_count_updates()` | Dispatcher, notify, history |
 | `PKG_UPDATE_LIST` | `pkgmgr.sh` | `pkgmgr_list_updates()` | Preview, JSON |
 | `_UPG_*` (the session's result, including `_UPG_ATTEMPTS`, `_UPG_REPORT`, `_UPG_CAUSE`, `_UPG_FAILS`, `_UPG_CULPRITS`) | `pkgmgr.sh` | `_pkgmgr_read_status()` | Dispatcher, `dialog.sh` |
+| `_PKGMGR_TERM_PID`, `_PKGMGR_ST_PID`, `_PKGMGR_ST_DONE` (the terminal started for the session, and the runner's progress read from its status file) | `pkgmgr.sh` | `_pkgmgr_launch_terminal()`, `_pkgmgr_status_progress()` | `_pkgmgr_wait_session()`, `_pkgmgr_sweep_sessions()` |
 | `_RETRY_F_*` (the session's failures per list) | `retry.sh` | `retry_record_failure()` | The runner, `retry_report_text()` |
 | `RETRY_LEDGER_FILE`, `RETRY_REPORT_DIR`, `RETRY_LOG_DIR`, `RETRY_REPORT_MAX`, `RETRY_LOG_MAX` | `retry.sh` | Module load | The ledger, report and capture functions |
 | `NOTIFY_BACKEND` | `notify.sh` | `notify_detect()` | All notify functions |
@@ -865,6 +866,7 @@ The following must never be committed:
 - flock operates on a user-owned file in `$XDG_RUNTIME_DIR`, or in the data directory when there is no runtime directory; the file is never unlinked
 - `UPDATE_COMMAND` is parsed by a grammar (optional `sudo`, a known package tool, plain arguments, chained with ` && `) and executed as argument vectors; there is no `bash -c` anywhere in the upgrade path
 - The upgrade session runs in a terminal emulator from an allowlist, resolved to a system-installed program; package names, Flatpak refs and snap names are validated before they reach a command line
+- The terminal is started in the background, in a transient scope of its own when a systemd user manager is there to make one (`app-<desktop id>-<random>.scope`, the desktop's own naming), so that the window and whatever the user opens in it are never charged to nudge's service or keep it running; the session's end is read from the runner's status file and the runner's process, never from the terminal's exit; the terminal inherits neither the lock's descriptor nor `_NUDGE_TRIGGER`; `systemd-run` is held to the terminal's own rule (a root-owned, non-writable program, or no scope)
 - The config file must be a regular file owned by the user, writable by nobody else; it is written atomically with mode 0600
 
 ---
