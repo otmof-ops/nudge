@@ -2,11 +2,11 @@
 # SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/nudge)
 # SPDX-License-Identifier: BSD-3-Clause
 # nudge — A gentle nudge to keep your system fresh.
-# Version: 2.3.1
+# Version: 2.3.2
 
 set -euo pipefail
 
-NUDGE_VERSION="2.3.1"
+NUDGE_VERSION="2.3.2"
 _NUDGE_START_TIME=$(date +%s)
 _NUDGE_TRIGGER="${_NUDGE_TRIGGER:-manual}"
 case "$_NUDGE_TRIGGER" in
@@ -681,6 +681,15 @@ case "$NOTIFY_RESPONSE" in
             _finalize
             json_emit "$EXIT_UPDATES_DECLINED"
             history_write "DECLINED" "Cancelled at the selection menu" "$EXIT_UPDATES_DECLINED"
+            _nudge_exit "$EXIT_UPDATES_DECLINED"
+        fi
+
+        # A no at the package manager's own question: nothing changed, and the user said so
+        if [[ "$_UPGRADE_RC" -eq 3 ]]; then
+            log_info "Declined at the package manager's question: $_UPG_DETAIL"
+            _finalize
+            json_emit "$EXIT_UPDATES_DECLINED"
+            history_write "DECLINED" "Declined at the package manager's question; $_UPG_DETAIL" "$EXIT_UPDATES_DECLINED"
             _nudge_exit "$EXIT_UPDATES_DECLINED"
         fi
 

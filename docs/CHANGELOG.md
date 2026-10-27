@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.2] — 2026-10-27
+
+The package manager's own question reaches the terminal.
+
+### Fixed
+- **Updates were never applied: apt's "[Y/n]" read end-of-file.** The
+  session ran the parts of `UPDATE_COMMAND` from inside a `while read` over
+  the parsed command text, so each part's standard input was that text, not
+  the terminal. `apt update` did not care; `apt full-upgrade` asked "Do you
+  want to continue? [Y/n]", read end-of-file at once, printed "Abort." and
+  left with exit 1 and nothing on stderr. nudge recorded that as the user
+  declining, never counted it, never retried it, and asked again at the next
+  login with the same list. This has been so since 2.1.0. The parts are now
+  read into an array first and run from a for loop, so every command keeps
+  the runner's own standard input, and the question waits for an answer.
+- **A no at the package manager's own question was filed as a failed
+  upgrade:** exit 3, a crash report, and the autostart service marked failed,
+  when nothing had changed and the user had said so. It is now a decline:
+  recorded as `DECLINED` in the history with the detail "Declined at the
+  package manager's question", exit 1, which a login or timer run maps to 0
+  like every other ordinary outcome. No ledger row, no failure report.
+- **The journal carried `/proc/<pid>/cmdline: No such file or directory`**
+  from the session wait whenever a runner ended between two of its checks:
+  the error went out before the redirection meant to silence it.
+
 ## [2.3.1] — 2026-10-26
 
 The update window is its own, and nudge ends when the session does.

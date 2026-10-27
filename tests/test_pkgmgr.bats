@@ -666,6 +666,24 @@ _ok_flatpak_step() { echo "flatpak" >> "$TMPDIR_TEST/calls"; _runner_status_writ
     [[ -z "$(retry_ledger_rows)" ]]
 }
 
+@test "every part of the update command keeps the terminal as its standard input" {
+    _retry_runner_setup
+    source "$PROJECT_DIR/lib/config.sh"
+    # apt's "[Y/n]" is read from standard input: the second part must see what the runner sees
+    cat > "$MOCK_BIN/apt" <<EOT
+#!/bin/bash
+if [[ "\$1" == "full-upgrade" ]]; then
+    IFS= read -r answer || answer="EOF"
+    echo "answer=\$answer" > "$TMPDIR_TEST/answer"
+fi
+exit 0
+EOT
+    chmod +x "$MOCK_BIN/apt"
+    PATH="$MOCK_BIN:$PATH"
+    printf 'y from the keyboard\n' | _runner_exec_command "apt update && apt full-upgrade" >/dev/null
+    grep -qx 'answer=y from the keyboard' "$TMPDIR_TEST/answer"
+}
+
 @test "sudo refusing the account ends the attempts; a mistyped password gets another go" {
     _retry_runner_setup
     FAIL_TIMES=99 FAIL_LINE="jay is not in the sudoers file." FAIL_RC=1
@@ -811,6 +829,23 @@ EOF
     _UPG_REPORT=""
     _pkgmgr_read_status "$TMPDIR_TEST/status2"
     [[ -z "$_UPG_REPORT" ]]
+}
+
+@test "a no at the package manager's own question is told from a failure" {
+    printf 'system=failed\ncause_system=declined\nflatpak=skipped\nsnap=ok\n' > "$TMPDIR_TEST/status"
+    _UPG_CAUSE=()
+    _pkgmgr_read_status "$TMPDIR_TEST/status"
+    _pkgmgr_declined_at_question
+    # the same no, but another list failed on its own: a failure
+    printf 'system=failed\ncause_system=declined\nflatpak=failed\n' > "$TMPDIR_TEST/status"
+    _UPG_CAUSE=()
+    _pkgmgr_read_status "$TMPDIR_TEST/status"
+    run ! _pkgmgr_declined_at_question
+    # a lock is the update's own failure
+    printf 'system=failed\ncause_system=lock\nflatpak=skipped\n' > "$TMPDIR_TEST/status"
+    _UPG_CAUSE=()
+    _pkgmgr_read_status "$TMPDIR_TEST/status"
+    run ! _pkgmgr_declined_at_question
 }
 
 @test "select_list_targets lists every target of a list, ticked or not" {
@@ -988,6 +1023,16 @@ EOT
     kill -0 "$window"            # the window is still open; nudge did not wait for it
     kill "$window" 2>/dev/null || true
     _stop "$runner"
+}
+
+@test "_pkgmgr_runner_alive is quiet about a pid that has just gone" {
+    local gone
+    sleep 0 &
+    gone=$!
+    wait "$gone"
+    run _pkgmgr_runner_alive "$gone"
+    [[ "$status" -eq 1 ]]
+    [[ -z "$output" ]]
 }
 
 @test "_pkgmgr_wait_session gives the hold a bounded time once the runner reported done" {

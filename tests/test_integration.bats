@@ -16,17 +16,17 @@ teardown() {
     [[ -n "${_INTEGRATION_TMPDIR:-}" ]] && rm -rf "$_INTEGRATION_TMPDIR" || true
 }
 
-@test "nudge --version prints 2.3.1" {
+@test "nudge --version prints 2.3.2" {
     run "$NUDGE" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge 2.3.1" ]]
+    [[ "$output" == "nudge 2.3.2" ]]
 }
 
 @test "nudge --help prints usage with bunny mascot" {
     run "$NUDGE" --help
     [[ "$status" -eq 0 ]]
     [[ "$output" == *'(\__/)'* ]]
-    [[ "$output" == *"nudge 2.3.1"* ]]
+    [[ "$output" == *"nudge 2.3.2"* ]]
     [[ "$output" == *"Usage:"* ]]
     [[ "$output" == *"--dry-run"* ]]
     [[ "$output" == *"--json"* ]]
@@ -76,7 +76,7 @@ teardown() {
 @test "install.sh --version prints version via setup.sh" {
     run "$PROJECT_DIR/install.sh" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge setup 2.3.1" ]]
+    [[ "$output" == "nudge setup 2.3.2" ]]
 }
 
 @test "install.sh --help shows setup.sh flags" {
@@ -263,7 +263,7 @@ _integration_terminal() {
     cp "$PROJECT_DIR"/lib/*.sh "$prefix/.local/lib/nudge/"
     run env -u NUDGE_LIB_DIR HOME="$_INTEGRATION_TMPDIR/elsewhere" "$prefix/.local/bin/nudge.sh" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge 2.3.1" ]]
+    [[ "$output" == "nudge 2.3.2" ]]
 }
 
 @test "flags that need a value or a parent flag are usage errors, not silent runs" {
@@ -388,6 +388,32 @@ EOT
     [[ "$output" == *"update session"* ]]
     [[ "$output" == *"here we go!"* ]]
     [[ "$output" == *"all done!"* ]]
+}
+
+@test "a no at the package manager's own question is a decline, not a crash" {
+    _integration_mocks
+    _integration_terminal
+    _integration_kdialog all
+    # no sudo in the command: the mock apt answers all of it (the real one would want a password)
+    printf 'UPDATE_COMMAND="apt update && apt full-upgrade"\n' >> "$XDG_CONFIG_HOME/nudge/nudge.conf"
+    cat > "$_INTEGRATION_TMPDIR/bin/apt" <<'EOT'
+#!/bin/bash
+case "${1:-}" in
+    list)         printf 'Listing...\nvim/noble-updates 2:9.1.0016-1ubuntu7.9 amd64 [upgradable from: 2:9.1.0016-1ubuntu7.8]\n' ;;
+    full-upgrade) echo "Do you want to continue? [Y/n] Abort."; exit 1 ;;
+esac
+exit 0
+EOT
+    run env DISPLAY=:0 KDE_SESSION_VERSION=5 _NUDGE_TRIGGER=login "$NUDGE"
+    [[ "$status" -eq 0 ]]
+    grep -q '"outcome":"DECLINED"' "$XDG_DATA_HOME/nudge/history.jsonl"
+    grep -q "Declined at the package manager's question; system:declined (1/1)" "$XDG_DATA_HOME/nudge/history.jsonl"
+    grep -q '"exit_code":1}' "$XDG_DATA_HOME/nudge/history.jsonl"
+    [[ ! -d "$XDG_DATA_HOME/nudge/crash-reports" ]] || [[ -z "$(ls -A "$XDG_DATA_HOME/nudge/crash-reports")" ]]
+    [[ ! -f "$XDG_DATA_HOME/nudge/failures.tsv" ]] || [[ ! -s "$XDG_DATA_HOME/nudge/failures.tsv" ]]
+    # a manual run keeps the code
+    run env DISPLAY=:0 KDE_SESSION_VERSION=5 XDG_DATA_HOME="$_INTEGRATION_TMPDIR/data2" "$NUDGE"
+    [[ "$status" -eq 1 ]]
 }
 
 @test "cancelling the scope picker is a decline at the selection menu" {

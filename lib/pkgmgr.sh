@@ -772,7 +772,8 @@ _pkgmgr_runner_alive() {
     local pid="$1"
     local -a words=()
     [[ "$pid" =~ ^[1-9][0-9]{0,9}$ ]] || return 1
-    mapfile -d '' -t words < "/proc/$pid/cmdline" 2>/dev/null || return 1
+    # 2>/dev/null before the open: a pid that has just gone would otherwise print the error
+    mapfile -d '' -t words 2>/dev/null < "/proc/$pid/cmdline" || return 1
     [[ " ${words[*]} " == *" --_run-upgrade "* ]]
 }
 
@@ -858,10 +859,19 @@ _pkgmgr_sweep_sessions() {
     return 0
 }
 
+# 0 when the only thing that went wrong is the user answering no at the
+# package manager's own question: nothing changed, and they said so
+_pkgmgr_declined_at_question() {
+    [[ "$_UPG_SYSTEM" == "failed" ]] || return 1
+    [[ "${_UPG_CAUSE[system]:-}" == "declined" ]] || return 1
+    [[ "$_UPG_FLATPAK" != "failed" && "$_UPG_SNAP" != "failed" ]]
+}
+
 # --- Run the upgrade session in a terminal and collect the result ---
 # Usage: pkgmgr_upgrade [scope]
 # Returns 0 when the session completed, 1 when it failed or never ran,
-# 2 when the user cancelled at the selection menu. Details land in _UPG_*.
+# 2 when the user cancelled at the selection menu, 3 when they answered no
+# at the package manager's own question. Details land in _UPG_*.
 pkgmgr_upgrade() {
     local scope="${1:-all}"
     _UPG_CANCELLED=0
@@ -907,7 +917,10 @@ pkgmgr_upgrade() {
 
     [[ "$rc" -ne 0 ]] && return 1
     [[ "$_UPG_CANCELLED" == "1" ]] && return 2
-    [[ "$_UPG_SYSTEM" == "failed" ]] && return 1
+    if [[ "$_UPG_SYSTEM" == "failed" ]]; then
+        _pkgmgr_declined_at_question && { _UPG_SYSTEM="declined"; return 3; }
+        return 1
+    fi
     return 0
 }
 
@@ -1101,6 +1114,11 @@ _runner_refused() {
 
 # Run a command string from the grammar (config_parse_update_command): each
 # " && " part becomes its own argument vector; no shell is involved.
+# The parts are read into an array first and run from a for loop, so each
+# command keeps the runner's own standard input: the terminal, where the
+# package manager's "[Y/n]" is answered. Run from inside a `while read`
+# over the parsed text, a command would read that text's end instead, and
+# apt would print "Abort." and leave before anyone saw the question.
 _runner_exec_command() {
     local cmdline="$1" line
     local parsed
@@ -1109,8 +1127,10 @@ _runner_exec_command() {
         _runner_refused "the update command was rejected: ${_UPDATE_COMMAND_ERROR:-invalid}"
         return 1
     fi
+    local -a lines=()
+    mapfile -t lines <<< "$parsed"
     local rc=0
-    while IFS= read -r line; do
+    for line in "${lines[@]}"; do
         [[ -z "$line" ]] && continue
         local -a argv=()
         read -ra argv <<< "$line"
@@ -1123,7 +1143,7 @@ _runner_exec_command() {
             _runner_result fail "${line}: exit ${rc}"
             return 1
         fi
-    done <<< "$parsed"
+    done
     echo ""
     _runner_result ok "done"
     return 0

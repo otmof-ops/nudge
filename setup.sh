@@ -3,12 +3,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # nudge — unified setup
 # Install, uninstall, configure, update, and status — all in one place.
-# Version: 2.3.1
+# Version: 2.3.2
 
 # shellcheck disable=SC2034  # NUDGE_VERSION is read by selfupdate.sh
 set -euo pipefail
 
-VERSION="2.3.1"
+VERSION="2.3.2"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # --- Find the libraries: the checkout's lib/, or an installed copy's ---
@@ -113,7 +113,7 @@ for arg in "$@"; do
         --help|-h)
             cat <<'HELPTEXT'
  (\__/)
- (='.'=)  nudge setup 2.3.1
+ (='.'=)  nudge setup 2.3.2
  (")_(")  unified installer, updater, and configurator
 
 Usage: setup.sh [OPTIONS]
