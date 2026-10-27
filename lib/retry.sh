@@ -23,6 +23,7 @@ _RETRY_CAUSE=""       # a short id: lock, dpkg-interrupted, disk-full, ... unkno
 _RETRY_CULPRITS=""    # the names the output blamed, one per line (validated)
 _RETRY_EVIDENCE=""    # the lines that decided it, one per line (sanitised, cut)
 _RETRY_TEXT=""        # the sanitised log, for the matchers
+_RETRY_UNFETCHED=""   # the downloads apt could not fetch, as name:arch, one per line
 
 # --- What this session recorded, per list (system, flatpak, snap) ---
 declare -gA _RETRY_F_CAUSE=()      # cause id
@@ -34,6 +35,7 @@ declare -gA _RETRY_F_ATTEMPTS=()   # attempts this session
 declare -gA _RETRY_F_STREAK=()     # most attempts any of the names has failed (the ledger, across sessions)
 declare -gA _RETRY_F_SINCE=()      # the earliest first-failure timestamp among the names
 declare -gA _RETRY_F_COUNT=()      # how many names were selected in the list
+declare -gA _RETRY_F_UNFETCHED=()  # space-separated selected names whose download failed
 
 # Human titles, the same as the selection menu's
 declare -gA _RETRY_LIST_TITLE=([system]="System packages" [flatpak]="Flatpak" [snap]="Snap")
@@ -144,6 +146,49 @@ _retry_name_from_file() {
     printf '%s' "$n"
 }
 
+# The downloads apt could not fetch: "name:arch" for each "Failed to fetch
+# …/name_version_arch.deb", unique, in apt's order, one per line. An index
+# that failed (InRelease, Packages) is not the download of an update.
+_retry_unfetched_apt() {
+    local file name arch out=""
+    [[ -n "$_RETRY_TEXT" ]] || return 0
+    while IFS= read -r file; do
+        file="${file##*/}"
+        file="${file%.deb}"
+        [[ "$file" == *_*_* ]] || continue
+        name="${file%%_*}"
+        arch="${file##*_}"
+        [[ "$arch" =~ ^[a-z0-9]+$ ]] || continue
+        retry_valid_name "$name" || continue
+        [[ $'\n'"$out" == *$'\n'"${name}:${arch}"$'\n'* ]] && continue
+        out+="${name}:${arch}"$'\n'
+    done < <(grep -oE 'Failed to fetch [^ ]+\.deb' <<< "$_RETRY_TEXT" | head -n 500 || true)
+    printf '%s' "$out"
+}
+
+# The selected targets whose download failed, in the order apt named them. A
+# download name:arch is the target name:arch when that is selected (another
+# architecture), else the target name (the native architecture, or all).
+# Usage: retry_unfetched_targets <downloads, one per line> <targets...>
+retry_unfetched_targets() {
+    local downloads="$1" key t
+    shift
+    local -A selected=() seen=()
+    for t in "$@"; do
+        [[ -n "$t" ]] && selected["$t"]=1
+    done
+    while IFS= read -r key; do
+        [[ -n "$key" ]] || continue
+        if [[ -n "${selected[$key]:-}" ]]; then t="$key"
+        elif [[ -n "${selected[${key%%:*}]:-}" ]]; then t="${key%%:*}"
+        else continue; fi
+        [[ -n "${seen[$t]:-}" ]] && continue
+        seen["$t"]=1
+        printf '%s\n' "$t"
+    done <<< "$downloads"
+    return 0
+}
+
 _retry_set() {
     # Usage: _retry_set <cause> <evidence pattern> [culprit pattern]
     _RETRY_CAUSE="$1"
@@ -157,9 +202,20 @@ _retry_set() {
 # ============================================================
 
 # Usage: retry_diagnose <list> <pkgmgr> <rc> <logfile>
-# Sets _RETRY_CAUSE, _RETRY_CULPRITS and _RETRY_EVIDENCE. Always succeeds:
-# an output nobody recognises is the cause "unknown".
+# Sets _RETRY_CAUSE, _RETRY_CULPRITS, _RETRY_EVIDENCE and _RETRY_UNFETCHED.
+# Always succeeds: an output nobody recognises is the cause "unknown".
 retry_diagnose() {
+    _retry_diagnose_cause "$@"
+    # apt names every archive it could not download; a full upgrade is all or
+    # nothing when one fails, so these are what held the rest back
+    _RETRY_UNFETCHED=""
+    if [[ "${2:-}" == "apt" ]]; then
+        _RETRY_UNFETCHED=$(_retry_unfetched_apt) || _RETRY_UNFETCHED=""
+    fi
+    return 0
+}
+
+_retry_diagnose_cause() {
     local list="${1:-system}" pkgmgr="${2:-}" rc="${3:-1}" log="${4:-}"
     _RETRY_CAUSE="unknown"; _RETRY_CULPRITS=""; _RETRY_EVIDENCE=""
     [[ "$rc" =~ ^[0-9]+$ ]] || rc=1
@@ -891,6 +947,11 @@ retry_record_failure() {
     local -a selected=()
     _retry_read_names selected < <(printf '%s\n' "$@")
     retry_diagnose "$list" "$pkgmgr" "$rc" "$log"
+    # the selected updates whose download failed: what held this step back
+    local -a unfetched=()
+    if [[ -n "$_RETRY_UNFETCHED" && "${#selected[@]}" -gt 0 ]]; then
+        mapfile -t unfetched < <(retry_unfetched_targets "$_RETRY_UNFETCHED" "${selected[@]}")
+    fi
     local -a blamed=()
     if [[ -n "$_RETRY_CULPRITS" ]]; then
         local n
@@ -900,7 +961,9 @@ retry_record_failure() {
             [[ -n "$n" ]] && blamed+=("$n")
         done <<< "$_RETRY_CULPRITS"
     fi
+    # counted against: what could not be downloaded, else the blamed names, else every selected one
     local -a counted=("${blamed[@]}")
+    [[ "${#unfetched[@]}" -gt 0 ]] && counted=("${unfetched[@]}")
     [[ "${#counted[@]}" -eq 0 ]] && counted=("${selected[@]}")
     # Counted against the names only when the update itself failed; a ledger
     # that cannot be written is a warning, never the end of the session
@@ -918,6 +981,7 @@ retry_record_failure() {
     _RETRY_F_STREAK["$list"]="${max:-0}"
     _RETRY_F_SINCE["$list"]="${since:-}"
     _RETRY_F_COUNT["$list"]="${#selected[@]}"
+    _RETRY_F_UNFETCHED["$list"]="${unfetched[*]}"
     # what the report names: the blamed ones, else the evidence names (a pid, a key), else nothing
     if [[ "${#blamed[@]}" -gt 0 ]]; then
         _RETRY_F_CULPRITS["$list"]="${blamed[*]}"
@@ -936,7 +1000,8 @@ retry_record_success() {
     # the capture of the attempt before this one is of no use now
     [[ -n "${_RETRY_F_LOG[$list]:-}" ]] && rm -f "${_RETRY_F_LOG[$list]}" 2>/dev/null
     unset "_RETRY_F_CAUSE[$list]" "_RETRY_F_RC[$list]" "_RETRY_F_LOG[$list]" "_RETRY_F_CULPRITS[$list]" \
-          "_RETRY_F_EVIDENCE[$list]" "_RETRY_F_ATTEMPTS[$list]" "_RETRY_F_STREAK[$list]" "_RETRY_F_SINCE[$list]" "_RETRY_F_COUNT[$list]"
+          "_RETRY_F_EVIDENCE[$list]" "_RETRY_F_ATTEMPTS[$list]" "_RETRY_F_STREAK[$list]" "_RETRY_F_SINCE[$list]" "_RETRY_F_COUNT[$list]" \
+          "_RETRY_F_UNFETCHED[$list]"
     return 0
 }
 
@@ -1039,6 +1104,14 @@ retry_report_text() {
                     out+="${nl}"
                 fi ;;
         esac
+        if [[ -n "${_RETRY_F_UNFETCHED[$list]:-}" ]]; then
+            local -a unf=()
+            read -ra unf <<< "${_RETRY_F_UNFETCHED[$list]}"
+            local ushown="${unf[*]:0:8}"
+            out+="download: failed for ${ushown// /, }"
+            [[ "${#unf[@]}" -gt 8 ]] && out+=", and $(( ${#unf[@]} - 8 )) more"
+            out+="${nl}"
+        fi
         if [[ "${_RETRY_F_COUNT[$list]:-0}" -gt 0 ]]; then
             out+="selected: ${_RETRY_F_COUNT[$list]} update"; [[ "${_RETRY_F_COUNT[$list]}" -ne 1 ]] && out+="s"; out+=" in this list${nl}"
         fi

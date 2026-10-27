@@ -684,6 +684,88 @@ EOT
     grep -qx 'answer=y from the keyboard' "$TMPDIR_TEST/answer"
 }
 
+# A system step that cannot download two updates while every one is ticked, and goes through without them
+_blocked_pair_step() {
+    echo "system: $(select_targets system | tr '\n' ' ')" >> "$TMPDIR_TEST/calls"
+    if select_all_on system; then
+        local esc=$'\033'
+        {
+            echo "${esc}[1;31mE: ${esc}[0mFailed to fetch https://repo.example.org/pool/main/n/nordvpn-gui/nordvpn-gui_6.0.1_amd64.deb  Certificate verification failed: The certificate is NOT trusted."
+            echo "${esc}[1;31mE: ${esc}[0mFailed to fetch https://repo.example.org/pool/main/n/nordvpn/nordvpn_6.0.1_amd64.deb  Certificate verification failed: The certificate is NOT trusted."
+            echo "${esc}[1;31mE: ${esc}[0mUnable to fetch some archives, maybe run apt-get update or try with --fix-missing?"
+        } >> "$_RUNNER_STEP_LOG"
+        _RUNNER_LAST_RC=100
+        _runner_status_write system failed
+        return 1
+    fi
+    _runner_status_write system ok
+    return 0
+}
+
+_apply_and_summarise() { _runner_apply_all && _runner_summary; }
+
+@test "the window's hold says what it waits for" {
+    command -v script >/dev/null || skip "script(1) is not installed"
+    # a terminal of its own; Enter arrives a second later, once the hold is waiting
+    run script -qec "bash -c 'source \"$PROJECT_DIR/lib/output.sh\"; source \"$PROJECT_DIR/lib/pkgmgr.sh\"; _runner_hold'" /dev/null < <(sleep 1; echo)
+    [[ "$output" == *"Press Enter to close this window."* ]]
+}
+
+@test "when some downloads fail, the next try leaves them out and installs the rest" {
+    _retry_runner_setup
+    select_reset
+    select_add system standard nordvpn nordvpn
+    select_add system standard nordvpn-gui nordvpn-gui
+    select_add system security openssl openssl
+    select_add system standard libgbm1:i386 libgbm1:i386
+    select_apply_scope all
+    _runner_apply_system() { _blocked_pair_step; }
+    _runner_apply_flatpak() { _runner_status_write flatpak skipped; return 0; }
+    _runner_apply_snap() { _runner_status_write snap skipped; return 0; }
+    _runner_ask_retry() { echo "asked: $1" >> "$TMPDIR_TEST/calls"; return 0; }
+    run _apply_and_summarise
+    [[ "$status" -eq 0 ]]
+    [[ "$(cat "$TMPDIR_TEST/calls")" == $'system: nordvpn nordvpn-gui openssl libgbm1:i386 \nasked: Try again without them?\nsystem: openssl libgbm1:i386 ' ]]
+    [[ "$output" == *"could not download: nordvpn-gui, nordvpn"* ]]
+    [[ "$output" == *"2 other updates can go in without them; those 2 stay for later."* ]]
+    [[ "$output" == *"done! the rest is fresh."* ]]
+    [[ "$output" == *"left for later, could not be downloaded: nordvpn-gui, nordvpn"* ]]
+    grep -qx 'left_system=nordvpn-gui nordvpn' "$_RUNNER_STATUS"
+    grep -qx 'left_cause_system=repo-tls' "$_RUNNER_STATUS"
+    [[ "$(grep '^selected_system=' "$_RUNNER_STATUS" | tail -1)" == "selected_system=2" ]]
+    grep -qx 'attempts=2' "$_RUNNER_STATUS"
+    # only the two that could not be downloaded are counted as failing
+    [[ "$(retry_ledger_rows | cut -f2 | sort | tr '\n' ' ')" == "nordvpn nordvpn-gui " ]]
+    # the launcher reads what was left out, and only names that pass the rule
+    _pkgmgr_read_status "$_RUNNER_STATUS"
+    [[ "${_UPG_LEFT[system]}" == "nordvpn-gui nordvpn" ]]
+    [[ "${_UPG_LEFT_CAUSE[system]}" == "repo-tls" ]]
+    [[ "$_UPG_SYSTEM" == "ok" ]]
+    printf 'left_snap=good-name evil;rm\nleft_cause_snap=Bad Cause\n' > "$TMPDIR_TEST/status2"
+    _pkgmgr_read_status "$TMPDIR_TEST/status2"
+    [[ "${_UPG_LEFT[snap]}" == "good-name" ]]
+    [[ -z "${_UPG_LEFT_CAUSE[snap]:-}" ]]
+}
+
+@test "when every selected download failed there is nothing to leave out: the plain question stands" {
+    _retry_runner_setup
+    select_reset
+    select_add system standard nordvpn nordvpn
+    select_add system standard nordvpn-gui nordvpn-gui
+    select_apply_scope all
+    _runner_apply_system() { _blocked_pair_step; }
+    _runner_apply_flatpak() { _runner_status_write flatpak skipped; return 0; }
+    _runner_apply_snap() { _runner_status_write snap skipped; return 0; }
+    _runner_ask_retry() { echo "asked: $1" >> "$TMPDIR_TEST/calls"; return 1; }
+    run _runner_apply_all
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"could not download: nordvpn-gui, nordvpn"* ]]
+    [[ "$output" != *"can go in without"* ]]
+    grep -qx 'asked: Try the failed ones again?' "$TMPDIR_TEST/calls"
+    run ! grep -q '^left_' "$_RUNNER_STATUS"
+    [[ "$(_runner_names_line "a b c d e f g h i j")" == "a, b, c, d, e, f, g, h, and 2 more" ]]
+}
+
 @test "sudo refusing the account ends the attempts; a mistyped password gets another go" {
     _retry_runner_setup
     FAIL_TIMES=99 FAIL_LINE="jay is not in the sudoers file." FAIL_RC=1

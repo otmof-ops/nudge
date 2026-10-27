@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] — 2026-10-27
+
+What can be downloaded goes in; what cannot waits.
+
+### Added
+- **When some downloads fail, the next try leaves them out and installs the
+  rest.** A full upgrade is all or nothing when a download fails, so one
+  repository that could not be reached (a certificate that does not verify,
+  a network that blocks it, a mirror that lost the file) held every other
+  update back with it, at every login. apt names each archive it could not
+  fetch; the session now lists those updates ("could not download: …"), says
+  how many others can go in without them, and asks "Try again without them?
+  [Y/n]". Yes unticks them and runs the rest as a selection
+  (`apt-get install --only-upgrade`). The session ends with what it left for
+  later, the history records them as `left for later (system, <cause>):
+  <names>`, and the next run offers them again. With apt only: the other
+  package managers keep the plain question.
+
+### Fixed
+- **A repository failure was counted against every selected update.** When
+  the output names the downloads that failed, only those are counted in the
+  failure ledger, so `nudge --failures` and the report's streak name the
+  updates that are really stuck instead of the whole list.
+- The failure report says which downloads failed (`download: failed for …`).
+- **The update window waited at the end without saying so.** Its "Press Enter
+  to close this window." went to `read -p`, which writes the prompt to
+  standard error, and that read keeps standard error quiet. The prompt is now
+  printed by itself, and the hold waits only on a terminal that opens.
+
 ## [2.3.2] — 2026-10-27
 
 The package manager's own question reaches the terminal.

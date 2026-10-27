@@ -16,17 +16,17 @@ teardown() {
     [[ -n "${_INTEGRATION_TMPDIR:-}" ]] && rm -rf "$_INTEGRATION_TMPDIR" || true
 }
 
-@test "nudge --version prints 2.3.2" {
+@test "nudge --version prints 2.4.0" {
     run "$NUDGE" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge 2.3.2" ]]
+    [[ "$output" == "nudge 2.4.0" ]]
 }
 
 @test "nudge --help prints usage with bunny mascot" {
     run "$NUDGE" --help
     [[ "$status" -eq 0 ]]
     [[ "$output" == *'(\__/)'* ]]
-    [[ "$output" == *"nudge 2.3.2"* ]]
+    [[ "$output" == *"nudge 2.4.0"* ]]
     [[ "$output" == *"Usage:"* ]]
     [[ "$output" == *"--dry-run"* ]]
     [[ "$output" == *"--json"* ]]
@@ -76,7 +76,7 @@ teardown() {
 @test "install.sh --version prints version via setup.sh" {
     run "$PROJECT_DIR/install.sh" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge setup 2.3.2" ]]
+    [[ "$output" == "nudge setup 2.4.0" ]]
 }
 
 @test "install.sh --help shows setup.sh flags" {
@@ -263,7 +263,7 @@ _integration_terminal() {
     cp "$PROJECT_DIR"/lib/*.sh "$prefix/.local/lib/nudge/"
     run env -u NUDGE_LIB_DIR HOME="$_INTEGRATION_TMPDIR/elsewhere" "$prefix/.local/bin/nudge.sh" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge 2.3.2" ]]
+    [[ "$output" == "nudge 2.4.0" ]]
 }
 
 @test "flags that need a value or a parent flag are usage errors, not silent runs" {
@@ -414,6 +414,37 @@ EOT
     # a manual run keeps the code
     run env DISPLAY=:0 KDE_SESSION_VERSION=5 XDG_DATA_HOME="$_INTEGRATION_TMPDIR/data2" "$NUDGE"
     [[ "$status" -eq 1 ]]
+}
+
+@test "a download that cannot be fetched is named, offered to be left out, and alone counted as failing" {
+    _integration_mocks
+    _integration_terminal
+    _integration_kdialog all
+    # no sudo in the command: the mock apt answers all of it, and the answer to
+    # the question is no, so nothing reaches the selection's own commands (sudo)
+    printf 'UPDATE_COMMAND="apt update && apt full-upgrade"\n' >> "$XDG_CONFIG_HOME/nudge/nudge.conf"
+    cat > "$_INTEGRATION_TMPDIR/bin/apt" <<'EOT'
+#!/bin/bash
+case "${1:-}" in
+    list)
+        printf 'Listing...\n'
+        printf 'openssl/noble-security 3.0.13-0ubuntu3.16 amd64 [upgradable from: 3.0.13-0ubuntu3.15]\n'
+        printf 'vim/noble-updates 2:9.1.0016-1ubuntu7.9 amd64 [upgradable from: 2:9.1.0016-1ubuntu7.8]\n' ;;
+    full-upgrade)
+        echo "E: Failed to fetch https://repo.example.org/pool/main/v/vim/vim_2%3a9.1.0016-1ubuntu7.9_amd64.deb  Certificate verification failed: The certificate is NOT trusted." >&2
+        echo "E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?" >&2
+        exit 100 ;;
+esac
+exit 0
+EOT
+    run bash -c "printf 'n\n' | env DISPLAY=:0 KDE_SESSION_VERSION=5 '$NUDGE'"
+    [[ "$status" -eq 3 ]]
+    [[ "$output" == *"could not download: vim"* ]]
+    [[ "$output" == *"1 other update can go in without it; it stays for later."* ]]
+    [[ "$output" == *"Try again without it? [Y/n]"* ]]
+    grep -q '"outcome":"FAILED"' "$XDG_DATA_HOME/nudge/history.jsonl"
+    grep -q 'retry declined' "$XDG_DATA_HOME/nudge/history.jsonl"
+    [[ "$(cut -f2 "$XDG_DATA_HOME/nudge/failures.tsv")" == "vim" ]]
 }
 
 @test "cancelling the scope picker is a decline at the selection menu" {
