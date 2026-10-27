@@ -84,7 +84,7 @@ installed copy verifies them again on every self-update. To start from a verifie
 one-liner:
 
 ```bash
-git clone --branch v2.3.1 https://github.com/otmof-ops/nudge.git && cd nudge && ./setup.sh --install --defaults
+git clone --branch v2.3.2 https://github.com/otmof-ops/nudge.git && cd nudge && ./setup.sh --install --defaults
 ```
 
 ## How It Works
@@ -395,7 +395,7 @@ With `--json`, nudge emits a single JSON object:
 
 ```json
 {
-  "nudge_version": "2.3.1",
+  "nudge_version": "2.3.2",
   "timestamp": "2026-10-09T09:15:00+08:00",
   "exit_code": 2,
   "exit_reason": "UPDATES_APPLIED",
@@ -538,6 +538,9 @@ man ./share/man/nudge.1    # Preview locally
 
 **The systemd timer never shows a dialog:**
 - The user manager needs the session's display: `systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XAUTHORITY` (KDE and GNOME do this for you). Without a display the run is skipped and recorded as `SKIPPED_NO_DISPLAY` in `nudge --history`.
+
+**nudge asks about the same updates at every login:**
+- Nothing was installed. Before 2.3.2 the package manager's own "[Y/n]" question read end-of-file instead of your keyboard, so `apt full-upgrade` aborted at once and the session filed it as a decline. Upgrade nudge; the question now waits in the window for your answer, and a no there is recorded as a decline, not a failed update.
 
 **The system monitor shows nudge using gigabytes, or the autostart service never stops:**
 - Before 2.3.1, the update window and every tab you opened in it were counted against "Nudge Update Checker", and nudge waited for the window to close. Since 2.3.1 the window lives in its own scope and nudge finishes when the session does; the tabs you keep open show under the terminal's name. A run started before the upgrade still waits for its window: close that window once, or log in again.
