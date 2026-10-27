@@ -2,12 +2,12 @@
 # SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/nudge)
 # SPDX-License-Identifier: BSD-3-Clause
 # nudge installer — delegates to setup.sh
-# Version: 2.3.2
+# Version: 2.4.0
 
 set -euo pipefail
 
 # shellcheck disable=SC2034  # VERSION is for §10.2 compliance; install.sh delegates to setup.sh
-VERSION="2.3.2"
+VERSION="2.4.0"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ ! -f "$SCRIPT_DIR/setup.sh" ]]; then

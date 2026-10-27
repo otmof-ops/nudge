@@ -373,6 +373,53 @@ _captured() {
     run ! retry_report_due
 }
 
+@test "apt: the downloads it could not fetch are named with their architecture; an index is not a download" {
+    local esc=$'\033'
+    retry_diagnose system apt 100 "$(_captured a \
+        "${esc}[1;31mE: ${esc}[0mFailed to fetch https://repo.nordvpn.com/deb/nordvpn/debian/pool/main/n/nordvpn-gui/nordvpn-gui_6.0.1_amd64.deb  Certificate verification failed: The certificate is NOT trusted. The certificate issuer is unknown. The name in the certificate does not match the expected.  Could not handshake: Error in the certificate verification. [IP: 208.91.112.55 443]${esc}[0m" \
+        "${esc}[1;31mE: ${esc}[0mFailed to fetch https://repo.nordvpn.com/deb/nordvpn/debian/pool/main/n/nordvpn/nordvpn_6.0.1_amd64.deb  Certificate verification failed: The certificate is NOT trusted. The certificate issuer is unknown. The name in the certificate does not match the expected.  Could not handshake: Error in the certificate verification. [IP: 208.91.112.55 443]${esc}[0m" \
+        "${esc}[1;31mE: ${esc}[0mUnable to fetch some archives, maybe run apt-get update or try with --fix-missing?${esc}[0m")"
+    [[ "$_RETRY_CAUSE" == "repo-tls" ]]
+    [[ "$_RETRY_CULPRITS" == "repo.nordvpn.com" ]]
+    [[ "$_RETRY_UNFETCHED" == $'nordvpn-gui:amd64\nnordvpn:amd64' ]]
+    retry_diagnose system apt 100 "$(_captured b \
+        "W: Failed to fetch https://repo.example.org/dists/stable/InRelease  Could not resolve 'repo.example.org'" \
+        "E: Failed to fetch http://archive.ubuntu.com/ubuntu/pool/main/v/vim/vim_2%3a9.1.0016-1ubuntu7.9_amd64.deb  404  Not Found [IP: 185.125.190.36 80]" \
+        "E: Failed to fetch http://archive.ubuntu.com/ubuntu/pool/main/m/mesa/libgbm1_25.2.8-0ubuntu0.24.04.4_i386.deb  404  Not Found [IP: 185.125.190.36 80]" \
+        "E: Failed to fetch http://archive.ubuntu.com/ubuntu/pool/main/f/fonts-x/fonts-x_1.0-1_all.deb  404  Not Found [IP: 185.125.190.36 80]")"
+    [[ "$_RETRY_UNFETCHED" == $'vim:amd64\nlibgbm1:i386\nfonts-x:all' ]]
+    # the other managers keep the plain diagnosis
+    retry_diagnose system dnf 1 "$(_captured c "E: Failed to fetch http://x/pool/v/vim/vim_1_amd64.deb  404  Not Found")"
+    [[ -z "$_RETRY_UNFETCHED" ]]
+}
+
+@test "a failure that names its downloads counts against those alone, matched to the selected targets" {
+    local log
+    log=$(_captured a \
+        "E: Failed to fetch https://repo.nordvpn.com/deb/nordvpn/debian/pool/main/n/nordvpn-gui/nordvpn-gui_6.0.1_amd64.deb  Certificate verification failed: The certificate is NOT trusted." \
+        "E: Failed to fetch https://repo.nordvpn.com/deb/nordvpn/debian/pool/main/n/nordvpn/nordvpn_6.0.1_amd64.deb  Certificate verification failed: The certificate is NOT trusted." \
+        "E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?")
+    retry_record_failure system apt 100 "$log" 1 alsa-ucm-conf nordvpn nordvpn-gui openssl
+    [[ "${_RETRY_F_CAUSE[system]}" == "repo-tls" ]]
+    [[ "${_RETRY_F_UNFETCHED[system]}" == "nordvpn-gui nordvpn" ]]
+    [[ "${_RETRY_F_CULPRITS[system]}" == "repo.nordvpn.com" ]]
+    [[ "${_RETRY_F_COUNT[system]}" -eq 4 ]]
+    [[ "$(retry_ledger_rows | cut -f2 | sort | tr '\n' ' ')" == "nordvpn nordvpn-gui " ]]
+    # an architecture is matched exactly; arch:all and the native one are the plain name
+    retry_ledger_clear
+    log=$(_captured b \
+        "E: Failed to fetch http://x/pool/main/m/mesa/libgbm1_25.2.8-0ubuntu0.24.04.4_i386.deb  404  Not Found" \
+        "E: Failed to fetch http://x/pool/main/f/fonts-x/fonts-x_1.0-1_all.deb  404  Not Found" \
+        "E: Failed to fetch http://x/pool/main/n/not-selected/not-selected_1_amd64.deb  404  Not Found")
+    retry_record_failure system apt 100 "$log" 1 libgbm1 libgbm1:i386 fonts-x vim
+    [[ "${_RETRY_F_UNFETCHED[system]}" == "libgbm1:i386 fonts-x" ]]
+    [[ "$(retry_ledger_rows | cut -f2 | sort | tr '\n' ' ')" == "fonts-x libgbm1:i386 " ]]
+    # the report says which downloads failed; success forgets them
+    [[ "$(retry_report_text apt all 1)" == *"download: failed for libgbm1:i386, fonts-x"* ]]
+    retry_record_success system libgbm1 libgbm1:i386 fonts-x vim
+    [[ -z "${_RETRY_F_UNFETCHED[system]:-}" ]]
+}
+
 # --- The report ---
 
 @test "the report names what failed, how often, the cause, the evidence, the steps and the log" {

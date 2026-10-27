@@ -2,11 +2,11 @@
 # SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/nudge)
 # SPDX-License-Identifier: BSD-3-Clause
 # nudge — A gentle nudge to keep your system fresh.
-# Version: 2.3.2
+# Version: 2.4.0
 
 set -euo pipefail
 
-NUDGE_VERSION="2.3.2"
+NUDGE_VERSION="2.4.0"
 _NUDGE_START_TIME=$(date +%s)
 _NUDGE_TRIGGER="${_NUDGE_TRIGGER:-manual}"
 case "$_NUDGE_TRIGGER" in
@@ -674,6 +674,10 @@ case "$NOTIFY_RESPONSE" in
         elif [[ "${_UPG_ATTEMPTS:-1}" -gt 1 ]]; then
             _UPG_DETAIL+="; attempts: ${_UPG_ATTEMPTS}"
         fi
+        for _upg_list in system flatpak snap; do
+            [[ -n "${_UPG_LEFT[$_upg_list]:-}" ]] || continue
+            _UPG_DETAIL+="; left for later (${_upg_list}, ${_UPG_LEFT_CAUSE[$_upg_list]:-unknown}): ${_UPG_LEFT[$_upg_list]}"
+        done
         [[ "${_UPG_RETRY_DECLINED:-0}" == "1" ]] && _UPG_DETAIL+="; retry declined"
 
         if [[ "$_UPGRADE_RC" -eq 2 ]]; then

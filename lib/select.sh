@@ -83,6 +83,16 @@ select_set() {
     done
 }
 
+# Usage: select_set_target <list> <target> <0|1>  (one row, by its target)
+select_set_target() {
+    local list="$1" target="$2" value="$3" i
+    for i in "${!_SEL_LIST[@]}"; do
+        [[ "${_SEL_LIST[$i]}" == "$list" && "${_SEL_TARGET[$i]}" == "$target" ]] || continue
+        _SEL_ON[$i]="$value"
+    done
+    return 0
+}
+
 select_set_all() {
     local value="$1" i
     for i in "${!_SEL_ON[@]}"; do _SEL_ON[$i]="$value"; done

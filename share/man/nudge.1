@@ -1,4 +1,4 @@
-.TH NUDGE 1 "October 2026" "nudge 2.3.2" "User Commands"
+.TH NUDGE 1 "October 2026" "nudge 2.4.0" "User Commands"
 .SH NAME
 nudge \- a gentle nudge to keep your system fresh
 .SH SYNOPSIS
@@ -205,7 +205,8 @@ false the update command runs straight away.
 .TP
 .B RETRY_ASK
 (bool, default: true) After a step fails, ask in the terminal whether to try
-the failed ones again.
+the failed ones again. When apt could not download some of the updates, the
+question is whether to try again without them, installing the rest.
 .TP
 .B RETRY_MAX_ATTEMPTS
 (int, default: 3) Attempts a session may make at one step, the first included

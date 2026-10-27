@@ -84,7 +84,7 @@ installed copy verifies them again on every self-update. To start from a verifie
 one-liner:
 
 ```bash
-git clone --branch v2.3.2 https://github.com/otmof-ops/nudge.git && cd nudge && ./setup.sh --install --defaults
+git clone --branch v2.4.0 https://github.com/otmof-ops/nudge.git && cd nudge && ./setup.sh --install --defaults
 ```
 
 ## How It Works
@@ -318,7 +318,7 @@ Edit `~/.config/nudge/nudge.conf`:
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `RETRY_ASK` | bool | `true` | After a step fails, ask in the terminal whether to try the failed ones again |
+| `RETRY_ASK` | bool | `true` | After a step fails, ask in the terminal whether to try the failed ones again (with apt, without the downloads that failed) |
 | `RETRY_MAX_ATTEMPTS` | int | `3` | Attempts a session may make at one step, the first included (1 = never retry) |
 | `RETRY_REPORT_AFTER` | int | `2` | Write the failure report once the same update has failed this many times, counted across sessions (1 = on the first failure) |
 
@@ -395,7 +395,7 @@ With `--json`, nudge emits a single JSON object:
 
 ```json
 {
-  "nudge_version": "2.3.2",
+  "nudge_version": "2.4.0",
   "timestamp": "2026-10-09T09:15:00+08:00",
   "exit_code": 2,
   "exit_reason": "UPDATES_APPLIED",
@@ -481,6 +481,19 @@ Each step's error output is captured as it runs (what you see in the window is u
 ```
 
 Only the failed steps run again; what went through is left alone. `RETRY_MAX_ATTEMPTS` (default 3) caps the attempts in one session and `RETRY_ASK=false` turns the question off. The causes nudge recognises: a lock held by another package manager (with its pid), an interrupted dpkg, a full disk, a sudo refusal, a repository whose certificate cannot be verified, a missing or expired repository key, a damaged index or a wrong clock, a stale mirror (404), an unreachable repository or no network at all, a package whose own install script failed (the package is named), packages that no longer fit together, a file conflict on Arch, a snap that is still running (the snap is named), snapd busy, a hold, a Flatpak remote that is gone, a Flatpak app that wants a newer Flatpak, snapd not running, a rejected `UPDATE_COMMAND`, a no at the package manager's own question, and Ctrl-C. Anything else is reported in the package manager's own words. The messages nudge recognises are the English ones; in another language the cause reads as unknown and the lines are quoted as they are. After a no, a Ctrl-C, sudo refusing the account or a rejected command there is nothing to try again, so the question is not asked and nothing is counted against the update.
+
+A full upgrade is all or nothing when a download fails, so one repository that cannot be reached (its certificate does not verify, the network blocks it, the mirror lost the file) would hold every other update back with it. apt names each download it could not fetch, and the question changes:
+
+```text
+    ✗ System packages · exit 100 · the certificate of the repository at repo.example.org could not be verified
+      Its certificate is wrong, expired, or for another name, or something between you and it is rewriting TLS. The other repositories are fine.
+      could not download: example-app-gui, example-app
+
+    56 other updates can go in without them; those 2 stay for later.
+    ▶ Try again without them? [Y/n]:
+```
+
+Yes unticks those updates and installs the rest as a selection (`apt-get install --only-upgrade`). The session ends with what it left for later, the history records them, and the next run offers them again. Only the updates that could not be downloaded are counted as failing. The other package managers keep the plain question.
 
 <p align="center"><img src="docs/assets/screenshot-failure.png" alt="Some updates didn't go through: the teary bunny, the system packages failed 3 times because another package manager is running, the firefox snap is still running, Show Report / Close" width="640"></p>
 

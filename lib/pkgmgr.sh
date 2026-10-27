@@ -49,6 +49,8 @@ _UPG_REPORT=""
 declare -gA _UPG_CAUSE=()
 declare -gA _UPG_FAILS=()
 declare -gA _UPG_CULPRITS=()
+declare -gA _UPG_LEFT=()        # per list: the updates the session left out because they could not be downloaded
+declare -gA _UPG_LEFT_CAUSE=()  # per list: the cause of the failure that left them out
 
 _PKG_NATIVE_ARCH=""
 
@@ -720,6 +722,19 @@ _pkgmgr_launch_terminal() {
     _PKGMGR_TERM_PID=$!
 }
 
+# The names on a status line that pass the name rule, space-separated
+_pkgmgr_status_names() {
+    local -a names=() kept=()
+    local n
+    read -ra names <<< "${1:-}"
+    for n in "${names[@]}"; do
+        if declare -F retry_valid_name >/dev/null 2>&1; then retry_valid_name "$n" || continue
+        else LC_ALL=C bash -c '[[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9+._:/@-]{0,127}$ ]]' _ "$n" 2>/dev/null || continue; fi
+        kept+=("$n")
+    done
+    printf '%s' "${kept[*]:-}"
+}
+
 # --- Read the runner's status file into _UPG_* ---
 _pkgmgr_read_status() {
     local status_file="$1" line key value
@@ -751,15 +766,11 @@ _pkgmgr_read_status() {
             fails_system|fails_flatpak|fails_snap)
                 _UPG_FAILS["${key#fails_}"]="${value//[!0-9]/}" ;;
             culprits_system|culprits_flatpak|culprits_snap)
-                local -a _names=() _kept=()
-                local _n
-                read -ra _names <<< "$value"
-                for _n in "${_names[@]}"; do
-                    if declare -F retry_valid_name >/dev/null 2>&1; then retry_valid_name "$_n" || continue
-                    else LC_ALL=C bash -c '[[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9+._:/@-]{0,127}$ ]]' _ "$_n" 2>/dev/null || continue; fi
-                    _kept+=("$_n")
-                done
-                _UPG_CULPRITS["${key#culprits_}"]="${_kept[*]:-}" ;;
+                _UPG_CULPRITS["${key#culprits_}"]=$(_pkgmgr_status_names "$value") ;;
+            left_system|left_flatpak|left_snap)
+                _UPG_LEFT["${key#left_}"]=$(_pkgmgr_status_names "$value") ;;
+            left_cause_system|left_cause_flatpak|left_cause_snap)
+                [[ "$value" =~ ^[a-z][a-z0-9-]{0,31}$ ]] && _UPG_LEFT_CAUSE["${key#left_cause_}"]="$value" ;;
         esac
     done < "$status_file"
     [[ -z "$_UPG_ATTEMPTS" ]] && _UPG_ATTEMPTS=1
@@ -879,7 +890,7 @@ pkgmgr_upgrade() {
     _UPG_SELECTED_SYSTEM=0; _UPG_SELECTED_FLATPAK=0; _UPG_SELECTED_SNAP=0
     _UPG_SNAPSHOT_ID=""
     _UPG_ATTEMPTS=1; _UPG_RETRY_DECLINED=0; _UPG_REPORT=""
-    _UPG_CAUSE=(); _UPG_FAILS=(); _UPG_CULPRITS=()
+    _UPG_CAUSE=(); _UPG_FAILS=(); _UPG_CULPRITS=(); _UPG_LEFT=(); _UPG_LEFT_CAUSE=()
 
     local self="${NUDGE_SELF:-}"
     if [[ -z "$self" || ! -f "$self" ]]; then
@@ -934,6 +945,8 @@ _RUNNER_ARCH=""
 _RUNNER_SCOPE="pick"   # a session without a scope line means nobody chose yet: the menu
 _RUNNER_STEP_LOG=""    # where the running step's stderr is also written (lib/retry.sh reads it)
 _RUNNER_LAST_RC=0      # the exit code of the last command a step ran
+declare -gA _RUNNER_LEFT=()        # per list: what this session left out because it could not be downloaded
+declare -gA _RUNNER_LEFT_CAUSE=()  # per list: the cause of the failure that left them out
 
 _runner_status_write() {
     [[ -n "$_RUNNER_STATUS" ]] || return 0
@@ -942,9 +955,11 @@ _runner_status_write() {
 
 _runner_hold() {
     echo ""
-    if [[ -t 0 ]] || [[ -r /dev/tty ]]; then
-        read -rp "    Press Enter to close this window." _ 2>/dev/null </dev/tty || true
-    fi
+    # only with a terminal that opens; the prompt is printed by itself, because
+    # read writes a -p prompt to stderr, which this read has to keep quiet
+    { : </dev/tty; } 2>/dev/null || return 0
+    printf '    Press Enter to close this window.'
+    read -r _ 2>/dev/null </dev/tty || true
 }
 
 _runner_finish() {
@@ -1263,7 +1278,16 @@ _runner_summary() {
     echo ""
     local done_msg="all done! everything you picked is fresh."
     [[ "$personality" == "classic" ]] && done_msg="Done. Everything selected was updated."
+    if [[ -n "${_RUNNER_LEFT[system]:-}${_RUNNER_LEFT[flatpak]:-}${_RUNNER_LEFT[snap]:-}" ]]; then
+        done_msg="done! the rest is fresh."
+        [[ "$personality" == "classic" ]] && done_msg="Done. The rest was updated."
+    fi
     _tui_bunny "$done_msg" "$parts" "${BUNNY_FACE_HAPPY:-^.^}"
+    for list in system flatpak snap; do
+        [[ -n "${_RUNNER_LEFT[$list]:-}" ]] || continue
+        _runner_result skip "left for later, could not be downloaded: $(_runner_names_line "${_RUNNER_LEFT[$list]}")"
+    done
+    return 0
 }
 
 # ============================================================
@@ -1323,14 +1347,18 @@ _runner_failures_block() {
         read -ra names <<< "${_RETRY_F_CULPRITS[$list]:-}"
         _runner_result fail "${_SEL_LIST_TITLE[$list]} · exit ${_RETRY_F_RC[$list]:-?} · $(retry_cause_headline "${_RETRY_F_CAUSE[$list]}" "$_RUNNER_PKGMGR" "$list" "${names[@]}")"
         printf '      %b%s%b\n' "${_TUI_SHADOW:-}" "$(retry_cause_explain "${_RETRY_F_CAUSE[$list]}" "$_RUNNER_PKGMGR" "$list")" "${_TUI_RESET:-}"
+        if [[ -n "${_RETRY_F_UNFETCHED[$list]:-}" ]]; then
+            printf '      %bcould not download: %s%b\n' "${_TUI_WARNING:-}" "$(_runner_names_line "${_RETRY_F_UNFETCHED[$list]}")" "${_TUI_RESET:-}"
+        fi
         if [[ "${_RETRY_F_STREAK[$list]:-0}" -gt 1 ]]; then
             printf '      %bthe same update has failed %s times now%b\n' "${_TUI_WARNING:-}" "${_RETRY_F_STREAK[$list]}" "${_TUI_RESET:-}"
         fi
     done
 }
 
-# Try the failed ones again? Enter or y is yes; n, anything else, or no
-# terminal to ask on (EOF) is no, so an unattended session never loops.
+# Try the failed ones again (or the question given)? Enter or y is yes; n,
+# anything else, or no terminal to ask on (EOF) is no, so an unattended
+# session never loops. Usage: _runner_ask_retry [question]
 _runner_ask_retry() {
     local answer="" tty=false
     { : </dev/tty; } 2>/dev/null && tty=true
@@ -1343,7 +1371,7 @@ _runner_ask_retry() {
     fi
     # the question is printed, not passed to read -p: a prompt from read shows
     # only when stdin is a terminal, and the session may be piped or logged
-    printf '    %b▶%b Try the failed ones again? [Y/n]: ' "${_TUI_PROMPT:-}" "${_TUI_RESET:-}"
+    printf '    %b▶%b %s [Y/n]: ' "${_TUI_PROMPT:-}" "${_TUI_RESET:-}" "${1:-Try the failed ones again?}"
     if [[ "$tty" == "true" ]]; then
         read -r answer 2>/dev/null </dev/tty || { echo ""; return 1; }
     else
@@ -1388,6 +1416,47 @@ _runner_failure_report() {
     return 0
 }
 
+# "a, b, c" for at most eight names, then "and N more"
+_runner_names_line() {
+    local -a names=()
+    read -ra names <<< "${1:-}"
+    local shown="${names[*]:0:8}"
+    shown="${shown// /, }"
+    [[ "${#names[@]}" -gt 8 ]] && shown+=", and $(( ${#names[@]} - 8 )) more"
+    printf '%s' "$shown"
+}
+
+# What the next try of a failed list leaves out: the selected updates the
+# package manager could not download, when that is some but not all of what
+# is ticked and another try could go through. Space-separated, or nothing.
+_runner_leave_out_plan() {
+    local list="$1" sel
+    local -a drop=()
+    [[ -n "${_RETRY_F_UNFETCHED[$list]:-}" ]] || return 0
+    select_is_atomic "$list" && return 0
+    retry_cause_retriable "${_RETRY_F_CAUSE[$list]:-unknown}" || return 0
+    read -ra drop <<< "${_RETRY_F_UNFETCHED[$list]}"
+    read -r sel _ <<< "$(select_count "$list")"
+    [[ "${#drop[@]}" -gt 0 && "${#drop[@]}" -lt "$sel" ]] || return 0
+    printf '%s' "${drop[*]}"
+}
+
+# Untick what could not be downloaded, and keep it for the summary and the launcher
+# Usage: _runner_leave_out <list> <targets...>
+_runner_leave_out() {
+    local list="$1" t sel
+    shift
+    for t in "$@"; do
+        select_set_target "$list" "$t" 0
+    done
+    _RUNNER_LEFT["$list"]="${_RUNNER_LEFT[$list]:+${_RUNNER_LEFT[$list]} }$*"
+    _RUNNER_LEFT_CAUSE["$list"]="${_RETRY_F_CAUSE[$list]:-unknown}"
+    read -r sel _ <<< "$(select_count "$list")"
+    _runner_status_write "selected_${list}" "$sel"
+    _runner_status_write "left_${list}" "${_RUNNER_LEFT[$list]}"
+    _runner_status_write "left_cause_${list}" "${_RUNNER_LEFT_CAUSE[$list]}"
+}
+
 # Every step, then the failed ones again while the user says yes
 _runner_apply_all() {
     local attempt=1 max="${RETRY_MAX_ATTEMPTS:-3}" done_lists=" " failed="" list
@@ -1411,14 +1480,44 @@ _runner_apply_all() {
         _runner_failures_block "$attempt" "$max"
         [[ "$attempt" -lt "$max" && "${RETRY_ASK:-true}" == "true" ]] || break
         local retriable=false
+        local -A plan=()
         for list in $failed; do
             retry_cause_retriable "${_RETRY_F_CAUSE[$list]:-unknown}" && retriable=true
+            plan["$list"]=$(_runner_leave_out_plan "$list")
         done
         [[ "$retriable" == "true" ]] || break
-        if ! _runner_ask_retry; then
+        # An update that cannot be downloaded holds a full upgrade back with
+        # it: the next try leaves those out and installs the rest
+        local question="Try the failed ones again?" dropped=0 sel others plural
+        local -a drop=()
+        for list in $failed; do
+            [[ -n "${plan[$list]:-}" ]] || continue
+            read -ra drop <<< "${plan[$list]}"
+            read -r sel _ <<< "$(select_count "$list")"
+            others=$((sel - ${#drop[@]}))
+            dropped=$((dropped + ${#drop[@]}))
+            plural="s"
+            [[ "$others" -eq 1 ]] && plural=""
+            echo ""
+            if [[ "${#drop[@]}" -eq 1 ]]; then
+                printf '    %b%s other update%s can go in without it; it stays for later.%b\n' \
+                    "${_TUI_SHADOW:-}" "$others" "$plural" "${_TUI_RESET:-}"
+            else
+                printf '    %b%s other update%s can go in without them; those %s stay for later.%b\n' \
+                    "${_TUI_SHADOW:-}" "$others" "$plural" "${#drop[@]}" "${_TUI_RESET:-}"
+            fi
+        done
+        if [[ "$dropped" -eq 1 ]]; then question="Try again without it?"
+        elif [[ "$dropped" -gt 1 ]]; then question="Try again without them?"; fi
+        if ! _runner_ask_retry "$question"; then
             _runner_status_write retry_declined 1
             break
         fi
+        for list in $failed; do
+            [[ -n "${plan[$list]:-}" ]] || continue
+            read -ra drop <<< "${plan[$list]}"
+            _runner_leave_out "$list" "${drop[@]}"
+        done
         attempt=$((attempt + 1))
         _runner_status_write attempts "$attempt"
         echo ""

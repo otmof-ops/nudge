@@ -19,7 +19,7 @@ teardown() {
 @test "setup.sh --version prints version" {
     run "$SETUP" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge setup 2.3.2" ]]
+    [[ "$output" == "nudge setup 2.4.0" ]]
 }
 
 @test "setup.sh --help shows bunny and all flags" {
@@ -248,10 +248,10 @@ teardown() {
     [[ -L "$TMPDIR_TEST/.local/bin/nudge" ]]
     [[ -f "$TMPDIR_TEST/.local/share/icons/hicolor/scalable/apps/nudge.svg" ]]
     run "$TMPDIR_TEST/.local/bin/nudge" --version
-    [[ "$output" == "nudge 2.3.2" ]]
+    [[ "$output" == "nudge 2.4.0" ]]
     run "$TMPDIR_TEST/.local/bin/nudge-setup.sh" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge setup 2.3.2" ]]
+    [[ "$output" == "nudge setup 2.4.0" ]]
 }
 
 @test "uninstall --keep-config keeps the history and state as well" {
