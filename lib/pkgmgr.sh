@@ -53,6 +53,11 @@ declare -gA _UPG_LEFT=()        # per list: the updates the session left out bec
 declare -gA _UPG_LEFT_CAUSE=()  # per list: the cause of the failure that left them out
 declare -gA _UPG_WAITING=()     # per list: standard updates set aside, waiting for their download
 declare -gA _UPG_WAITING_CAUSE=()
+declare -gA _UPG_MEASURED=()    # per list: 1 when the session measured the installed versions
+declare -gA _UPG_CHANGED=()     # per list: packages whose version changed
+declare -gA _UPG_ADDED=()       # per list: packages newly installed
+declare -gA _UPG_GONE=()        # per list: packages removed
+declare -gA _UPG_MISSED=()      # per list: ticked updates that did not change
 
 _PKG_NATIVE_ARCH=""
 
@@ -159,34 +164,21 @@ _priority_rank() {
 }
 
 # --- Count updates ---
-# apt uses update-notifier's apt-check when present (the count Ubuntu shows at
+# apt counts the rows apt's simulation of the configured upgrade would install
 # login); everything else counts the detailed list.
-PKG_COUNT_SOURCE="list"   # what the count came from: apt-check (no phased updates) or the list
 pkgmgr_count_updates() {
-    PKG_COUNT_SOURCE="list"
     PKG_UPDATES_TOTAL=0
     PKG_UPDATES_SECURITY=0
     PKG_UPDATES_CRITICAL=0
 
     case "$DETECTED_PKGMGR" in
         apt)
-            local apt_check="${NUDGE_APT_CHECK:-/usr/lib/update-notifier/apt-check}"
-            local apt_out=""
-            if [[ -x "$apt_check" ]]; then
-                # apt-check prints "total;security" on stderr by design
-                apt_out=$("$apt_check" 2>&1 1>/dev/null || true)
-            fi
-            if [[ "$apt_out" =~ ^[0-9]+\;[0-9]+$ ]]; then
-                PKG_UPDATES_TOTAL="${apt_out%%;*}"
-                PKG_UPDATES_SECURITY="${apt_out##*;}"
-                # shellcheck disable=SC2034  # read by lib/waiting.sh
-                PKG_COUNT_SOURCE="apt-check"
-            else
-                [[ -x "$apt_check" ]] && log_warn "apt-check returned unexpected output, counting apt list instead"
-                pkgmgr_list_updates
-                PKG_UPDATES_TOTAL=$(_pkgmgr_list_count)
-                PKG_UPDATES_SECURITY=$(_pkgmgr_list_count_security)
-            fi
+            # what the configured upgrade installs now, from apt's own
+            # simulation (pkgmgr_list_updates): the number, the names and the
+            # session are the same set
+            pkgmgr_list_updates
+            PKG_UPDATES_TOTAL=$(_pkgmgr_list_count)
+            PKG_UPDATES_SECURITY=$(_pkgmgr_list_count_security)
             ;;
         dnf)
             pkgmgr_list_updates
@@ -249,8 +241,20 @@ _dnf_collect_security_names() {
 }
 
 # --- List updates with details ---
+# What apt lists as upgradable that the configured upgrade leaves for now,
+# one "target|reason" per line: phased (the distribution is still phasing it
+# in), held (apt-mark hold) or kept (apt keeps it back)
+PKG_LATER_LIST=""
+PKG_UPDATES_LATER=0
+
+PKG_LIST_READ=false   # pkgmgr_list_updates has run in this process
+
 pkgmgr_list_updates() {
+    # shellcheck disable=SC2034  # read by nudge.sh
+    PKG_LIST_READ=true
     PKG_UPDATE_LIST=""
+    PKG_LATER_LIST=""
+    PKG_UPDATES_LATER=0
     PKG_UPDATES_CRITICAL=0
 
     case "$DETECTED_PKGMGR" in
@@ -269,7 +273,8 @@ pkgmgr_list_updates() {
                     priority=$(_classify_priority "$name" "$is_sec")
                     _pkg_add_row "$name" "$from_ver" "$to_ver" "$priority" "$arch" "$sec"
                 fi
-            done < <(apt list --upgradable 2>/dev/null || true)
+            done < <(LC_ALL=C timeout 60 apt list --upgradable 2>/dev/null || true)
+            _pkgmgr_apt_classify
             ;;
         dnf)
             _dnf_collect_security_names
@@ -318,17 +323,191 @@ pkgmgr_list_updates() {
     PKG_UPDATE_LIST="${PKG_UPDATE_LIST%$'\n'}"
 }
 
+# The target a row of PKG_UPDATE_LIST is called by: name, or name:arch for
+# another architecture (apt's own spelling)
+pkgmgr_row_target() {
+    local name arch native="${2:-}"
+    IFS='|' read -r name _ _ _ arch _ <<< "$1"
+    [[ -n "$native" ]] || native=$(pkgmgr_native_arch 2>/dev/null) || native=""
+    if [[ "${DETECTED_PKGMGR:-}" == "apt" && -n "$arch" && -n "$native" && "$arch" != "$native" && "$arch" != "all" ]]; then
+        printf '%s:%s' "$name" "$arch"
+    else
+        printf '%s' "$name"
+    fi
+}
+
+# The kind of upgrade the configured command does, from its parts: full
+# (apt or apt-get full-upgrade, dist-upgrade), plain-new (apt upgrade, which
+# installs new packages but removes none), plain (apt-get upgrade), or
+# unknown (anything else: nudge then does not guess what it would install).
+# Only -y and -q style options are understood; any other makes it unknown.
+pkgmgr_upgrade_kind() {
+    local cmd parsed line kind="unknown" tool verb w
+    cmd=$(_build_upgrade_cmd 2>/dev/null) || { echo unknown; return 0; }
+    declare -F config_parse_update_command >/dev/null 2>&1 || { echo unknown; return 0; }
+    parsed=$(config_parse_update_command "$cmd" 2>/dev/null) || { echo unknown; return 0; }
+    while IFS= read -r line; do
+        local -a words=()
+        read -ra words <<< "$line"
+        [[ "${words[0]:-}" == "sudo" ]] && words=("${words[@]:1}")
+        tool="${words[0]:-}"
+        [[ "$tool" == "apt" || "$tool" == "apt-get" ]] || { echo unknown; return 0; }
+        verb=""
+        for w in "${words[@]:1}"; do
+            case "$w" in
+                -y|--yes|--assume-yes|-q|-qq|--quiet) ;;
+                -*) echo unknown; return 0 ;;
+                *) [[ -z "$verb" ]] && verb="$w" || { echo unknown; return 0; } ;;
+            esac
+        done
+        case "$verb" in
+            update) ;;
+            full-upgrade|dist-upgrade) kind="full" ;;
+            upgrade) if [[ "$tool" == "apt" ]]; then kind="plain-new"; else kind="plain"; fi ;;
+            *) echo unknown; return 0 ;;
+        esac
+    done <<< "$parsed"
+    echo "$kind"
+}
+
+# Offer what the configured upgrade installs now. Every row apt's simulation
+# of it would not install moves to PKG_LATER_LIST with the reason, the
+# counts follow the rows that stay, and what the upgrade brings besides (new
+# packages, removals) is kept for the dialog. Nothing moves when apt cannot
+# simulate, when the configured command is not one nudge recognises, or when
+# not one row matches what apt said (a parse nudge cannot trust): then every
+# upgradable package is offered, as before.
+PKG_APT_NEW=0         # new packages the upgrade would install
+PKG_APT_REMOVE=""     # packages the upgrade would remove, space-separated
+_pkgmgr_apt_classify() {
+    PKG_LATER_LIST=""
+    PKG_UPDATES_LATER=0
+    PKG_APT_NEW=0
+    PKG_APT_REMOVE=""
+    [[ -n "$PKG_UPDATE_LIST" ]] || return 0
+    local kind_of sim
+    kind_of=$(pkgmgr_upgrade_kind)
+    if [[ "$kind_of" == "unknown" ]]; then
+        log_info "The update command is not one nudge simulates; offering every upgradable package"
+        return 0
+    fi
+    if ! sim=$(pkgmgr_apt_upgrade_set "$kind_of"); then
+        log_warn "apt could not simulate the upgrade; offering every upgradable package"
+        return 0
+    fi
+    local -A inst=() phased=() held=() row=()
+    local kind word
+    while read -r kind word; do
+        case "$kind" in
+            inst)   inst["$word"]=1 ;;
+            phased) phased["$word"]=1 ;;
+            remv)   PKG_APT_REMOVE+="${PKG_APT_REMOVE:+ }${word}" ;;
+        esac
+    done <<< "$sim"
+    while IFS= read -r word; do
+        [[ -n "$word" ]] && held["$word"]=1
+    done < <(LC_ALL=C timeout 20 apt-mark showhold 2>/dev/null || true)
+    local native line name arch t reason kept="" crit=0 priority matched=0
+    local later="" later_n=0
+    native=$(pkgmgr_native_arch)
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        IFS='|' read -r name _ _ priority arch _ <<< "$line"
+        t="$name"
+        [[ -n "$arch" && "$arch" != "$native" && "$arch" != "all" ]] && t="${name}:${arch}"
+        row["$t"]=1
+        if [[ -n "${inst[$t]:-}" ]]; then
+            kept+="${line}"$'\n'
+            matched=$((matched + 1))
+            [[ "$priority" == "CRITICAL" ]] && crit=$((crit + 1))
+            continue
+        fi
+        if [[ -n "${phased[$t]:-}" ]]; then reason="phased"; matched=$((matched + 1))
+        elif [[ -n "${held[$t]:-}" ]]; then reason="held"; matched=$((matched + 1))
+        else reason="kept"; fi
+        later+="${t}|${reason}"$'\n'
+        later_n=$((later_n + 1))
+    done <<< "$PKG_UPDATE_LIST"
+    if [[ "$matched" -eq 0 && "${#inst[@]}" -gt 0 ]]; then
+        log_warn "apt's simulation names none of the upgradable packages; offering every one"
+        PKG_APT_REMOVE=""
+        return 0
+    fi
+    PKG_UPDATE_LIST="${kept%$'\n'}"
+    PKG_LATER_LIST="${later%$'\n'}"
+    PKG_UPDATES_LATER="$later_n"
+    PKG_UPDATES_CRITICAL="$crit"
+    # what the upgrade installs that is not an update of something installed
+    for word in "${!inst[@]}"; do
+        [[ -n "${row[$word]:-}" ]] || PKG_APT_NEW=$((PKG_APT_NEW + 1))
+    done
+    [[ "$PKG_UPDATES_LATER" -gt 0 ]] && log_info "Left for later by the upgrade itself: $PKG_UPDATES_LATER ($(pkgmgr_later_summary))"
+    return 0
+}
+
+# "2 being phased in · 1 on hold · 1 kept back by apt", or nothing
+pkgmgr_later_summary() {
+    local t r ph=0 ho=0 ke=0 out=""
+    [[ -n "${PKG_LATER_LIST:-}" ]] || return 0
+    while IFS='|' read -r t r; do
+        case "$r" in phased) ph=$((ph + 1)) ;; held) ho=$((ho + 1)) ;; *) ke=$((ke + 1)) ;; esac
+    done <<< "$PKG_LATER_LIST"
+    [[ "$ph" -gt 0 ]] && out+="${ph} being phased in"
+    [[ "$ho" -gt 0 ]] && out+="${out:+ · }${ho} on hold"
+    [[ "$ke" -gt 0 ]] && out+="${out:+ · }${ke} kept back by apt"
+    printf '%s' "$out"
+}
+
+# A sentence for the dialog about what the upgrade does besides the updates
+# offered (new packages it brings, packages it removes), or nothing
+pkgmgr_plan_note() {
+    local -a rm=()
+    read -ra rm <<< "${PKG_APT_REMOVE:-}"
+    local new="${PKG_APT_NEW:-0}" out=""
+    [[ "$new" -gt 0 ]] && out="installs ${new} new package$([[ "$new" -ne 1 ]] && echo s)"
+    if [[ "${#rm[@]}" -gt 0 ]]; then
+        local shown="${rm[*]:0:4}"
+        shown="${shown// /, }"
+        [[ "${#rm[@]}" -gt 4 ]] && shown+=", and $(( ${#rm[@]} - 4 )) more"
+        out+="${out:+ and }removes ${#rm[@]}: ${shown}"
+    fi
+    [[ -n "$out" ]] && printf 'The upgrade also %s.' "$out"
+    return 0
+}
+
+# A sentence for the dialog about what the upgrade leaves for later, or nothing
+pkgmgr_later_note() {
+    local n="${PKG_UPDATES_LATER:-0}"
+    [[ "$n" -gt 0 ]] || return 0
+    local t r ph=0
+    while IFS='|' read -r t r; do [[ "$r" == "phased" ]] && ph=$((ph + 1)); done <<< "$PKG_LATER_LIST"
+    if [[ "$ph" -eq "$n" ]]; then
+        if [[ "$n" -eq 1 ]]; then printf '1 more comes later: the distribution is still phasing it in'
+        else printf '%d more come later: the distribution is still phasing them in' "$n"; fi
+    else
+        if [[ "$n" -eq 1 ]]; then printf '1 more comes later (%s)' "$(pkgmgr_later_summary)"
+        else printf '%d more come later (%s)' "$n" "$(pkgmgr_later_summary)"; fi
+    fi
+}
+
 # --- What an apt upgrade would do, simulated as the user (nothing locked or changed) ---
-# Usage: pkgmgr_apt_upgrade_set [full|plain] -> "inst <target>" for each
-# package it would install or upgrade, "phased <target>" for each it defers
-# while the distribution phases it in; a target is name, or name:arch for
-# another architecture. 1 when apt cannot say.
+# Usage: pkgmgr_apt_upgrade_set [full|plain|plain-new] -> "inst <target>"
+# for each package it would install or upgrade, "remv <target>" for each it
+# would remove, "phased <target>" for each it defers while the distribution
+# phases it in; a target is name, or name:arch for another architecture.
+# 1 when apt cannot say (or the kind is unknown).
 pkgmgr_apt_upgrade_set() {
-    local how="full-upgrade" native out line name arch in_phased=false
-    [[ "${1:-full}" == "plain" ]] && how="upgrade"
+    local native out line name arch in_phased=false
+    local -a how=()
+    case "${1:-full}" in
+        full)      how=(full-upgrade) ;;
+        plain)     how=(upgrade) ;;
+        plain-new) how=(--with-new-pkgs upgrade) ;;
+        *) return 1 ;;
+    esac
     command -v apt-get >/dev/null 2>&1 || return 1
     native=$(pkgmgr_native_arch)
-    out=$(LC_ALL=C timeout 60 apt-get -s -q -o Debug::NoLocking=1 "$how" 2>/dev/null) || return 1
+    out=$(LC_ALL=C timeout 60 apt-get -s -q -o Debug::NoLocking=1 "${how[@]}" 2>/dev/null) || return 1
     local LC_ALL=C
     while IFS= read -r line; do
         if [[ "$line" == "The following upgrades have been deferred due to phasing:" ]]; then
@@ -347,11 +526,11 @@ pkgmgr_apt_upgrade_set() {
             fi
             in_phased=false
         fi
-        [[ "$line" =~ ^Inst\ ([A-Za-z0-9][A-Za-z0-9+._-]*)(:([A-Za-z0-9_-]+))?\  ]] || continue
-        name="${BASH_REMATCH[1]}"
-        arch="${BASH_REMATCH[3]}"
+        [[ "$line" =~ ^(Inst|Remv)\ ([A-Za-z0-9][A-Za-z0-9+._-]*)(:([A-Za-z0-9_-]+))?(\ |$) ]] || continue
+        name="${BASH_REMATCH[2]}"
+        arch="${BASH_REMATCH[4]}"
         [[ -n "$arch" && "$arch" != "$native" && "$arch" != "all" ]] && name+=":${arch}"
-        printf 'inst %s\n' "$name"
+        if [[ "${BASH_REMATCH[1]}" == "Inst" ]]; then printf 'inst %s\n' "$name"; else printf 'remv %s\n' "$name"; fi
     done <<< "$out"
     return 0
 }
@@ -559,37 +738,51 @@ _pkgmgr_sorted_list() {
 # --- Build preview text (truncated package list) ---
 pkgmgr_build_preview() {
     local max_lines="${1:-30}"
-    local preview=""
-    local count=0
-    local total_lines
-
-    if [[ -z "$PKG_UPDATE_LIST" ]]; then
-        echo "(no package details available)"
-        return
-    fi
-
-    total_lines=$(printf '%s\n' "$PKG_UPDATE_LIST" | grep -c '.' || true)
+    local preview="" count=0 total_lines=0
+    local -a lines=()
     local native
     native=$(pkgmgr_native_arch)
 
-    local name from_ver to_ver priority arch _sec
-    while IFS='|' read -r name from_ver to_ver priority arch _sec; do
-        [[ -z "$name" ]] && continue
+    local name from_ver to_ver priority arch _sec line kind ref app fname version
+    if [[ -n "$PKG_UPDATE_LIST" ]]; then
+        while IFS='|' read -r name from_ver to_ver priority arch _sec; do
+            [[ -z "$name" ]] && continue
+            line="  ${name}"
+            [[ "$DETECTED_PKGMGR" == "apt" && -n "$arch" && "$arch" != "$native" && "$arch" != "all" ]] && line+=":${arch}"
+            if [[ -n "$from_ver" ]]; then
+                line+=" (${from_ver} → ${to_ver})"
+            elif [[ -n "$to_ver" ]]; then
+                line+=" (→ ${to_ver})"
+            fi
+            [[ "$priority" == "CRITICAL" ]] && line+=" ★ CRITICAL"
+            [[ "$priority" == "SECURITY" ]] && line+=" ⚠ SECURITY"
+            lines+=("$line")
+        done < <(_pkgmgr_sorted_list)
+    fi
+    if [[ -n "${PKG_FLATPAK_LIST:-}" ]]; then
+        while IFS='|' read -r kind ref app fname version; do
+            [[ -z "$ref" ]] && continue
+            line="  ${fname:-$app} (flatpak${version:+ → ${version}})"
+            lines+=("${line//[[:cntrl:]]/}")
+        done <<< "$PKG_FLATPAK_LIST"
+    fi
+    if [[ -n "${PKG_SNAP_LIST:-}" ]]; then
+        while IFS='|' read -r name version _; do
+            [[ -z "$name" ]] && continue
+            line="  ${name} (snap${version:+ → ${version}})"
+            lines+=("${line//[[:cntrl:]]/}")
+        done <<< "$PKG_SNAP_LIST"
+    fi
+    total_lines="${#lines[@]}"
+    if [[ "$total_lines" -eq 0 ]]; then
+        echo "(no package details available)"
+        return
+    fi
+    for line in "${lines[@]}"; do
         count=$((count + 1))
         [[ "$count" -gt "$max_lines" ]] && break
-
-        local line="  ${name}"
-        [[ "$DETECTED_PKGMGR" == "apt" && -n "$arch" && "$arch" != "$native" && "$arch" != "all" ]] && line+=":${arch}"
-        if [[ -n "$from_ver" ]]; then
-            line+=" (${from_ver} → ${to_ver})"
-        elif [[ -n "$to_ver" ]]; then
-            line+=" (→ ${to_ver})"
-        fi
-        [[ "$priority" == "CRITICAL" ]] && line+=" ★ CRITICAL"
-        [[ "$priority" == "SECURITY" ]] && line+=" ⚠ SECURITY"
         preview+="${line}"$'\n'
-    done < <(_pkgmgr_sorted_list)
-
+    done
     local remaining=$((total_lines - max_lines))
     if [[ "$remaining" -gt 0 ]]; then
         preview+="  ...and ${remaining} more"$'\n'
@@ -645,6 +838,9 @@ pkgmgr_write_session() {
         if [[ -n "${PKG_WAITING_LIST:-}" ]] && declare -F waiting_held_targets >/dev/null 2>&1; then
             echo "waiting=$(waiting_held_targets)"
         fi
+        if [[ -n "${PKG_WAITING_SNAP_LIST:-}" ]] && declare -F waiting_held_snaps >/dev/null 2>&1; then
+            echo "waiting_snap=$(waiting_held_snaps)"
+        fi
         echo "[system]"
         [[ -n "$PKG_UPDATE_LIST" ]] && printf '%s\n' "$PKG_UPDATE_LIST"
         [[ -n "${PKG_WAITING_LIST:-}" ]] && printf '%s\n' "$PKG_WAITING_LIST"
@@ -652,6 +848,7 @@ pkgmgr_write_session() {
         [[ -n "$PKG_FLATPAK_LIST" ]] && printf '%s\n' "$PKG_FLATPAK_LIST"
         echo "[snap]"
         [[ -n "$PKG_SNAP_LIST" ]] && printf '%s\n' "$PKG_SNAP_LIST"
+        [[ -n "${PKG_WAITING_SNAP_LIST:-}" ]] && printf '%s\n' "$PKG_WAITING_SNAP_LIST"
     } > "$sess"
     printf '%s' "$sess"
 }
@@ -824,6 +1021,16 @@ _pkgmgr_read_status() {
                 _UPG_WAITING["${key#waiting_}"]=$(_pkgmgr_status_names "$value") ;;
             waiting_cause_system|waiting_cause_flatpak|waiting_cause_snap)
                 [[ "$value" =~ ^[a-z][a-z0-9-]{0,31}$ ]] && _UPG_WAITING_CAUSE["${key#waiting_cause_}"]="$value" ;;
+            measured_system|measured_flatpak|measured_snap)
+                [[ "$value" == "1" ]] && _UPG_MEASURED["${key#measured_}"]=1 ;;
+            changed_system|changed_flatpak|changed_snap)
+                [[ "$value" =~ ^[0-9]{1,7}$ ]] && _UPG_CHANGED["${key#changed_}"]="$value" ;;
+            added_system|added_flatpak|added_snap)
+                [[ "$value" =~ ^[0-9]{1,7}$ ]] && _UPG_ADDED["${key#added_}"]="$value" ;;
+            gone_system|gone_flatpak|gone_snap)
+                [[ "$value" =~ ^[0-9]{1,7}$ ]] && _UPG_GONE["${key#gone_}"]="$value" ;;
+            missed_system|missed_flatpak|missed_snap)
+                _UPG_MISSED["${key#missed_}"]=$(_pkgmgr_status_names "$value") ;;
         esac
     done < "$status_file"
     [[ -z "$_UPG_ATTEMPTS" ]] && _UPG_ATTEMPTS=1
@@ -935,8 +1142,9 @@ _pkgmgr_declined_at_question() {
 # Usage: pkgmgr_upgrade [scope]
 # Returns 0 when the session completed, 1 when it failed or never ran,
 # 2 when the user cancelled at the selection menu, 3 when they answered no
-# at the package manager's own question, 4 when nothing failed and nothing
-# could go in (all of it waits for its download). Details land in _UPG_*.
+# at the package manager's own question, 4 when nothing failed and, measured,
+# nothing changed (what was picked waits, or apt had nothing to do now).
+# Details land in _UPG_*.
 pkgmgr_upgrade() {
     local scope="${1:-all}"
     _UPG_CANCELLED=0
@@ -946,6 +1154,7 @@ pkgmgr_upgrade() {
     _UPG_ATTEMPTS=1; _UPG_RETRY_DECLINED=0; _UPG_REPORT=""
     _UPG_CAUSE=(); _UPG_FAILS=(); _UPG_CULPRITS=(); _UPG_LEFT=(); _UPG_LEFT_CAUSE=()
     _UPG_WAITING=(); _UPG_WAITING_CAUSE=()
+    _UPG_MEASURED=(); _UPG_CHANGED=(); _UPG_ADDED=(); _UPG_GONE=(); _UPG_MISSED=()
 
     local self="${NUDGE_SELF:-}"
     if [[ -z "$self" || ! -f "$self" ]]; then
@@ -987,11 +1196,33 @@ pkgmgr_upgrade() {
         _pkgmgr_declined_at_question && { _UPG_SYSTEM="declined"; return 3; }
         return 1
     fi
-    if [[ "$_UPG_SYSTEM" == "waiting" && "$_UPG_FLATPAK" != "ok" && "$_UPG_SNAP" != "ok" \
-          && "$_UPG_FLATPAK" != "failed" && "$_UPG_SNAP" != "failed" ]]; then
-        return 4
-    fi
+    _pkgmgr_nothing_changed && return 4
     return 0
+}
+
+# 0 when no list failed, at least one ran, and every list that ran was
+# measured and changed nothing: the session installed nothing, honestly said
+_pkgmgr_nothing_changed() {
+    local list st ran=false
+    for list in system flatpak snap; do
+        case "$list" in
+            system)  st="$_UPG_SYSTEM" ;;
+            flatpak) st="$_UPG_FLATPAK" ;;
+            snap)    st="$_UPG_SNAP" ;;
+        esac
+        case "$st" in
+            failed) return 1 ;;
+            ok|waiting)
+                ran=true
+                if [[ -n "${_UPG_MEASURED[$list]:-}" ]]; then
+                    [[ $(( ${_UPG_CHANGED[$list]:-0} + ${_UPG_ADDED[$list]:-0} + ${_UPG_GONE[$list]:-0} )) -eq 0 ]] || return 1
+                else
+                    # not measured: only a list that waited is known to have changed nothing
+                    [[ "$st" == "waiting" ]] || return 1
+                fi ;;
+        esac
+    done
+    [[ "$ran" == "true" ]]
 }
 
 # ============================================================
@@ -1013,6 +1244,7 @@ declare -gA _RUNNER_DEFERRED=()    # per list: what a full upgrade would leave f
 _RUNNER_APT_FRESH=false            # apt's package lists were refreshed in this session
 _RUNNER_SIMULATED=false            # the full upgrade's share was worked out since the last refresh
 _RUNNER_HELD=""                    # what the check held back before the session (the session's waiting= line)
+_RUNNER_HELD_SNAP=""               # the snaps it held back while their app ran (waiting_snap=)
 
 _runner_status_write() {
     [[ -n "$_RUNNER_STATUS" ]] || return 0
@@ -1062,6 +1294,7 @@ _runner_load_session() {
     select_reset
     _RUNNER_SCOPE="pick"
     _RUNNER_HELD=""
+    _RUNNER_HELD_SNAP=""
     local section="" line native
     local name from_ver to_ver priority arch sec kind ref app label info target sub
     while IFS= read -r line || [[ -n "$line" ]]; do
@@ -1075,6 +1308,14 @@ _runner_load_session() {
                 read -ra held_words <<< "${line#waiting=}"
                 for held_t in "${held_words[@]}"; do
                     _runner_valid_target system "$held_t" && _RUNNER_HELD+="${_RUNNER_HELD:+ }${held_t}"
+                done
+                continue ;;
+            waiting_snap=*)
+                local held_s
+                local -a held_snaps=()
+                read -ra held_snaps <<< "${line#waiting_snap=}"
+                for held_s in "${held_snaps[@]}"; do
+                    _runner_valid_target snap "$held_s" && _RUNNER_HELD_SNAP+="${_RUNNER_HELD_SNAP:+ }${held_s}"
                 done
                 continue ;;
             scope=*)
@@ -1371,59 +1612,306 @@ _runner_scope_line() {
     printf '%s' "$out"
 }
 
-# The closing lines when everything went through (a failure ends with the
-# failures block and, when it keeps happening, the report). What waits is
-# said once, quietly; it is not a failure.
-_runner_summary() {
-    local list sel tot parts="" waiting="" later=""
-    local personality="${BUNNY_PERSONALITY:-disney}"
+# ============================================================
+# What the session really changed: the installed versions before and after
+# ============================================================
+
+declare -gA _RUNNER_V0=()        # "list|key" -> the version installed before the session
+declare -gA _RUNNER_MEASURED=()  # list -> 1 when it was measured before and after
+declare -gA _RUNNER_V0_N=()      # list -> how many packages the snapshot before had
+declare -gA _RUNNER_M_CHANGED=() # list -> packages whose version changed
+declare -gA _RUNNER_M_ADDED=()   # list -> packages installed that were not there before
+declare -gA _RUNNER_M_GONE=()    # list -> packages there before and gone after
+declare -gA _RUNNER_M_MISSED=()  # list -> ticked updates whose version did not change
+
+# A Flatpak ref without its app/ or runtime/ prefix: how both lists spell it
+_runner_ref_key() { local r="${1#app/}"; printf '%s' "${r#runtime/}"; }
+
+# Usage: _runner_snapshot <list> -> "key<TAB>version" for every installed
+# package: apt as its targets are spelled (name, or name:arch for another
+# architecture; a package a failed run left half-configured is still there),
+# Flatpak by ref without the prefix (both installations, user and system),
+# Snap by name with the revision. Nothing when the package manager fails or
+# cannot say: a list it could not read is not measured.
+_runner_snapshot() {
+    local list="$1" native raw
+    case "$list" in
+        system)
+            case "$_RUNNER_PKGMGR" in
+                apt)
+                    command -v dpkg-query >/dev/null 2>&1 || return 0
+                    native="${_RUNNER_ARCH:-}"
+                    [[ -n "$native" ]] || native=$(pkgmgr_native_arch 2>/dev/null) || native=""
+                    # shellcheck disable=SC2016  # dpkg-query's own format, not the shell's
+                    raw=$(LC_ALL=C timeout 60 dpkg-query -W -f='${db:Status-Abbrev}\t${binary:Package}\t${Version}\n' 2>/dev/null) || return 0
+                    awk -F'\t' -v native="$native" '
+                        $2 != "" && substr($1, 2, 1) != "n" && substr($1, 2, 1) != "c" {
+                            n = $2; c = index(n, ":")
+                            if (c > 0) { a = substr(n, c + 1); if (a == native || a == "all") n = substr(n, 1, c - 1) }
+                            print n "\t" $3
+                        }' <<< "$raw" ;;
+                dnf|zypper)
+                    command -v rpm >/dev/null 2>&1 || return 0
+                    raw=$(LC_ALL=C timeout 60 rpm -qa --qf '%{NAME}\t%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\n' 2>/dev/null) || return 0
+                    LC_ALL=C sort <<< "$raw" \
+                        | awk -F'\t' '$1 != "" { if ($1 in v) v[$1] = v[$1] "," $2; else v[$1] = $2 } END { for (k in v) print k "\t" v[k] }' ;;
+                pacman)
+                    command -v pacman >/dev/null 2>&1 || return 0
+                    raw=$(LC_ALL=C timeout 60 pacman -Q 2>/dev/null) || return 0
+                    awk 'NF >= 2 { print $1 "\t" $2 }' <<< "$raw" ;;
+            esac ;;
+        snap)
+            command -v snap >/dev/null 2>&1 || return 0
+            raw=$(LC_ALL=C timeout 60 snap list 2>/dev/null) || return 0
+            awk 'NR > 1 && NF >= 3 { print $1 "\t" $3 }' <<< "$raw" ;;
+        flatpak)
+            command -v flatpak >/dev/null 2>&1 || return 0
+            raw=$(LC_ALL=C timeout 60 flatpak list --columns=ref,active,installation 2>/dev/null) || return 0
+            LC_ALL=C sort <<< "$raw" | awk -F'\t' '
+                $1 != "" && $1 != "Ref" {
+                    r = $1; sub(/^(app|runtime)\//, "", r); x = $3 "=" $2
+                    if (r in v) v[r] = v[r] "," x; else v[r] = x
+                } END { for (k in v) print k "\t" v[k] }' ;;
+    esac
+    return 0
+}
+
+# Before the first step: what is installed, for every list with something ticked
+_runner_measure_begin() {
+    local list key v out
+    _RUNNER_V0=(); _RUNNER_MEASURED=(); _RUNNER_V0_N=()
+    _RUNNER_M_CHANGED=(); _RUNNER_M_ADDED=(); _RUNNER_M_GONE=(); _RUNNER_M_MISSED=()
     for list in system flatpak snap; do
-        read -r sel tot <<< "$(select_count "$list")"
+        select_any_on "$list" || continue
+        out=$(_runner_snapshot "$list")
+        [[ -n "$out" ]] || continue
+        _RUNNER_MEASURED["$list"]=1
+        _RUNNER_V0_N["$list"]=0
+        while IFS=$'\t' read -r key v; do
+            [[ -n "$key" ]] || continue
+            _RUNNER_V0["$list|$key"]="$v"
+            _RUNNER_V0_N["$list"]=$(( ${_RUNNER_V0_N[$list]} + 1 ))
+        done <<< "$out"
+    done
+    return 0
+}
+
+# After the last step: what really changed, and which ticked updates did not;
+# into _RUNNER_M_* and the status file for the launcher
+_runner_measure_end() {
+    local list key v k t out changed added gone missed
+    for list in system flatpak snap; do
+        [[ -n "${_RUNNER_MEASURED[$list]:-}" ]] || continue
+        out=$(_runner_snapshot "$list")
+        # a snapshot that failed, or came back with less than half of what was
+        # there before, is not a measurement: the list is not measured
+        if [[ -z "$out" || $(grep -c . <<< "$out") -lt $(( ${_RUNNER_V0_N[$list]:-0} / 2 )) ]]; then
+            unset "_RUNNER_MEASURED[$list]"
+            continue
+        fi
+        changed=0; added=0; gone=0; missed=""
+        # shellcheck disable=SC2034  # filled through _runner_row_maps' namerefs
+        local -A me_sub=() me_ver=()
+        _runner_row_maps "$list" me_sub me_ver
+        local -A now=()
+        while IFS=$'\t' read -r key v; do
+            [[ -n "$key" ]] || continue
+            now["$key"]="$v"
+            if [[ -z "${_RUNNER_V0[$list|$key]+x}" ]]; then added=$((added + 1))
+            elif [[ "${_RUNNER_V0[$list|$key]}" != "$v" ]]; then changed=$((changed + 1)); fi
+        done <<< "$out"
+        for k in "${!_RUNNER_V0[@]}"; do
+            [[ "$k" == "$list|"* ]] || continue
+            [[ -n "${now[${k#"$list|"}]+x}" ]] || gone=$((gone + 1))
+        done
+        # the updates meant to go in are what is ticked now; one that was
+        # installed before, is the same version after, and was not already at
+        # the version it was to go to (something else updated it first) did not go in
+        while IFS= read -r t; do
+            [[ -n "$t" ]] || continue
+            key="$t"
+            [[ "$list" == "flatpak" ]] && key=$(_runner_ref_key "$t")
+            [[ -n "${_RUNNER_V0[$list|$key]+x}" && -n "${now[$key]+x}" ]] || continue
+            [[ "${now[$key]}" == "${_RUNNER_V0[$list|$key]}" ]] || continue
+            [[ -n "${me_ver[$t]:-}" && "${me_ver[$t]}" == "${_RUNNER_V0[$list|$key]}" ]] && continue
+            missed+="${missed:+ }${t}"
+        done < <(select_targets "$list")
+        unset now me_sub me_ver
+        _RUNNER_M_CHANGED["$list"]="$changed"
+        _RUNNER_M_ADDED["$list"]="$added"
+        _RUNNER_M_GONE["$list"]="$gone"
+        _RUNNER_M_MISSED["$list"]="$missed"
+        _runner_status_write "measured_${list}" 1
+        _runner_status_write "changed_${list}" "$changed"
+        _runner_status_write "added_${list}" "$added"
+        _runner_status_write "gone_${list}" "$gone"
+        _runner_status_write "missed_${list}" "$missed"
+    done
+    return 0
+}
+
+# How many of a list's packages changed, measured (only called for measured lists)
+_runner_changed_count() {
+    printf '%s' "$(( ${_RUNNER_M_CHANGED[$1]:-0} ))"
+}
+
+# Why the ticked updates of a list did not change, when nudge can tell: a
+# few words, or nothing. Usage: _runner_missed_reason <list> <targets...>
+_runner_missed_reason() {
+    local list="$1" t sim kind word all_phased=true all_running=true
+    shift
+    [[ $# -gt 0 ]] || return 0
+    case "$list" in
+        system)
+            [[ "$_RUNNER_PKGMGR" == "apt" ]] || return 0
+            sim=$(pkgmgr_apt_upgrade_set "$(pkgmgr_upgrade_kind)" 2>/dev/null) || return 0
+            local -A ph=()
+            while read -r kind word; do [[ "$kind" == "phased" ]] && ph["$word"]=1; done <<< "$sim"
+            for t in "$@"; do [[ -n "${ph[$t]:-}" ]] || all_phased=false; done
+            [[ "$all_phased" == "true" ]] && printf 'the distribution is still phasing them in' ;;
+        snap)
+            for t in "$@"; do pgrep -f "^/snap/${t}/" >/dev/null 2>&1 || all_running=false; done
+            [[ "$all_running" == "true" ]] && printf 'they are running; snap refreshes them once they are closed' ;;
+    esac
+    return 0
+}
+
+# The closing lines when everything went through (a failure ends with the
+# failures block and, when it keeps happening, the report). Every number is
+# what the session measured, and an update that was meant to go in and did
+# not is named; what waits is said once, quietly.
+_runner_summary() {
+    local list sel parts="" waiting="" later="" n total=0 moved=0 unverified=0 extra
+    local personality="${BUNNY_PERSONALITY:-disney}"
+    local -a missed_lists=()
+    local missed_n=0
+    for list in system flatpak snap; do
         [[ -n "${_RUNNER_WAITING[$list]:-}" ]] && waiting+="${waiting:+ }${_RUNNER_WAITING[$list]}"
         [[ -n "${_RUNNER_DEFERRED[$list]:-}" ]] && later+="${later:+ }${_RUNNER_DEFERRED[$list]}"
+        read -r sel _ <<< "$(select_count "$list")"
         [[ "$sel" -gt 0 ]] || continue
-        parts+="${parts:+ · }${_SEL_LIST_TITLE[$list]}: ${sel}"
+        if [[ -z "${_RUNNER_MEASURED[$list]:-}" ]]; then
+            # it said it went through, and nudge could not check: no number is claimed for it
+            unverified=$((unverified + sel))
+            parts+="${parts:+ · }${_SEL_LIST_TITLE[$list]}: ${sel} picked, not verified"
+            continue
+        fi
+        n=$(_runner_changed_count "$list")
+        total=$((total + n))
+        extra=""
+        if [[ -n "${_RUNNER_MEASURED[$list]:-}" ]]; then
+            [[ "${_RUNNER_M_ADDED[$list]:-0}" -gt 0 ]] && extra+=", ${_RUNNER_M_ADDED[$list]} new"
+            [[ "${_RUNNER_M_GONE[$list]:-0}" -gt 0 ]] && extra+=", ${_RUNNER_M_GONE[$list]} removed"
+            if [[ -n "${_RUNNER_M_MISSED[$list]:-}" ]]; then
+                missed_lists+=("$list")
+                local -a mm=()
+                read -ra mm <<< "${_RUNNER_M_MISSED[$list]}"
+                missed_n=$((missed_n + ${#mm[@]}))
+            fi
+            total=$((total + ${_RUNNER_M_ADDED[$list]:-0}))
+            moved=$((moved + ${_RUNNER_M_GONE[$list]:-0}))
+        fi
+        [[ "$n" -gt 0 || -n "$extra" ]] && parts+="${parts:+ · }${_SEL_LIST_TITLE[$list]}: ${n}${extra}"
     done
     echo ""
     local -a w=() d=() h=()
     read -ra w <<< "$waiting"
     read -ra d <<< "$later"
     read -ra h <<< "$_RUNNER_HELD"
-    if [[ -z "$parts" && $(( ${#w[@]} + ${#d[@]} + ${#h[@]} )) -gt 0 ]]; then
-        # nothing could go in this time, and nothing failed
-        local msg="nothing to install right now." sub
+    local updated
+    updated=$(_runner_updates_word "$total")
+    if [[ $((total + moved + unverified)) -eq 0 ]]; then
+        # nothing failed, and nothing went in: when something picked was left
+        # as it was, that is what is said, and the line below names it
+        local msg="nothing to install right now." sub=""
         [[ "$personality" == "classic" ]] && msg="Nothing to install right now."
+        if [[ "$missed_n" -gt 0 ]]; then
+            msg="nothing went in this time."
+            [[ "$personality" == "classic" ]] && msg="Nothing was installed this time."
+        fi
         if [[ "${#w[@]}" -gt 0 ]]; then
-            sub="$(_runner_names_line "$waiting") will go in once $([[ "${#w[@]}" -eq 1 ]] && echo it || echo they) can be downloaded."
+            local it="they"
+            [[ "${#w[@]}" -eq 1 ]] && it="it"
+            if [[ "${_RUNNER_WAITING_CAUSE[snap]:-}" == "snap-running" && -z "${_RUNNER_WAITING[system]:-}${_RUNNER_WAITING[flatpak]:-}" ]]; then
+                sub="$(_runner_names_line "$waiting") will be refreshed once ${it} $([[ "$it" == "it" ]] && echo is || echo are) closed."
+            else
+                sub="$(_runner_names_line "$waiting") will go in once ${it} can be downloaded."
+            fi
         elif [[ "${#d[@]}" -gt 0 ]]; then
             sub="$(_runner_names_line "$later") will come once the distribution has phased $([[ "${#d[@]}" -eq 1 ]] && echo it || echo them) in."
-        else
+        elif [[ "${#h[@]}" -gt 0 ]]; then
             sub="$(_runner_names_line "$_RUNNER_HELD") will go in once $([[ "${#h[@]}" -eq 1 ]] && echo it || echo they) can be downloaded."
+        elif [[ -n "$_RUNNER_HELD_SNAP" ]]; then
+            sub="$(_runner_names_line "$_RUNNER_HELD_SNAP") will be refreshed once closed."
         fi
         _tui_bunny "$msg" "$sub" "${BUNNY_FACE_NORMAL:-}"
-        return 0
+    elif [[ "$total" -eq 0 ]]; then
+        # nothing measured went in: what it did is said as it is
+        local msg
+        if [[ "$moved" -gt 0 && "$unverified" -eq 0 ]]; then
+            msg="done! no updates went in; ${moved} package$([[ "$moved" -ne 1 ]] && echo s) removed."
+            [[ "$personality" == "classic" ]] && msg="Done. No updates were installed; ${moved} package$([[ "$moved" -ne 1 ]] && echo s) removed."
+        else
+            msg="done! the package manager says it went through."
+            [[ "$personality" == "classic" ]] && msg="Done. The package manager reports success."
+        fi
+        _tui_bunny "$msg" "$parts" "${BUNNY_FACE_NORMAL:-}"
+    else
+        local done_msg left_n=0
+        for list in system flatpak snap; do
+            local -a ln=()
+            read -ra ln <<< "${_RUNNER_LEFT[$list]:-}"
+            left_n=$((left_n + ${#ln[@]}))
+        done
+        if [[ "$missed_n" -gt 0 ]]; then
+            done_msg="done! ${updated} went in, ${missed_n} did not."
+            [[ "$personality" == "classic" ]] && done_msg="Done. ${updated^} installed; ${missed_n} did not change."
+            _tui_bunny "$done_msg" "$parts" "${BUNNY_FACE_NORMAL:-}"
+        elif [[ "$left_n" -gt 0 ]]; then
+            done_msg="done! ${updated} went in, ${left_n} left for later."
+            [[ "$personality" == "classic" ]] && done_msg="Done. ${updated^} installed; ${left_n} left for later."
+            _tui_bunny "$done_msg" "$parts" "${BUNNY_FACE_HAPPY:-^.^}"
+        else
+            done_msg="all done! ${updated} went in."
+            [[ "$personality" == "classic" ]] && done_msg="Done. ${updated^} installed."
+            _tui_bunny "$done_msg" "$parts" "${BUNNY_FACE_HAPPY:-^.^}"
+        fi
     fi
-    local done_msg="all done! everything you picked is fresh."
-    [[ "$personality" == "classic" ]] && done_msg="Done. Everything selected was updated."
-    if [[ -n "${_RUNNER_LEFT[system]:-}${_RUNNER_LEFT[flatpak]:-}${_RUNNER_LEFT[snap]:-}" ]]; then
-        done_msg="done! the rest is fresh."
-        [[ "$personality" == "classic" ]] && done_msg="Done. The rest was updated."
-    elif [[ "${#w[@]}" -gt 0 ]]; then
-        done_msg="all done! everything's fresh."
-        [[ "$personality" == "classic" ]] && done_msg="Done. Everything available was updated."
-    fi
-    _tui_bunny "$done_msg" "$parts" "${BUNNY_FACE_HAPPY:-^.^}"
+    for list in "${missed_lists[@]}"; do
+        local -a names=()
+        read -ra names <<< "${_RUNNER_M_MISSED[$list]}"
+        local why
+        why=$(_runner_missed_reason "$list" "${names[@]}")
+        local who="apt"
+        [[ "$list" == "snap" ]] && who="snap"
+        [[ "$list" == "flatpak" ]] && who="flatpak"
+        [[ "$list" == "system" && "$_RUNNER_PKGMGR" != "apt" ]] && who="$_RUNNER_PKGMGR"
+        _runner_result skip "${who} left these as they were: $(_runner_names_line "${names[*]}")${why:+ (${why})}"
+    done
     for list in system flatpak snap; do
         [[ -n "${_RUNNER_LEFT[$list]:-}" ]] || continue
         _runner_result skip "left for later, could not be downloaded: $(_runner_names_line "${_RUNNER_LEFT[$list]}") · nudge tries again next time"
     done
-    if [[ "${#w[@]}" -gt 0 ]]; then
-        local what="standard updates are"
-        [[ "${#w[@]}" -eq 1 ]] && what="standard update is"
-        _runner_result skip "${#w[@]} ${what} waiting for a download: $(_runner_names_line "$waiting") (nudge --waiting)"
-    fi
+    for list in system flatpak snap; do
+        [[ -n "${_RUNNER_WAITING[$list]:-}" ]] || continue
+        local -a wl=()
+        read -ra wl <<< "${_RUNNER_WAITING[$list]}"
+        if [[ "${_RUNNER_WAITING_CAUSE[$list]:-}" == "snap-running" ]]; then
+            _runner_result skip "waiting until $([[ "${#wl[@]}" -eq 1 ]] && echo it is || echo they are) closed: $(_runner_names_line "${_RUNNER_WAITING[$list]}") (nudge --waiting)"
+        else
+            local what="standard updates are"
+            [[ "${#wl[@]}" -eq 1 ]] && what="standard update is"
+            _runner_result skip "${#wl[@]} ${what} waiting for a download: $(_runner_names_line "${_RUNNER_WAITING[$list]}") (nudge --waiting)"
+        fi
+    done
     return 0
 }
+
+# "1 update", "56 updates"
+_runner_updates_word() {
+    if [[ "${1:-0}" -eq 1 ]]; then printf '1 update'; else printf '%s updates' "${1:-0}"; fi
+}
+
 
 # ============================================================
 # When a step does not go through: the retry loop and the report
@@ -1555,18 +2043,6 @@ _runner_auto_partial() {
     [[ "$any" == "true" ]]
 }
 
-# The kind of upgrade the configured command does: full (full-upgrade,
-# dist-upgrade, the default) or plain (upgrade)
-_runner_upgrade_kind() {
-    local cmd
-    cmd=$(_build_upgrade_cmd 2>/dev/null) || cmd=""
-    case "$cmd" in
-        *full-upgrade*|*dist-upgrade*) echo full ;;
-        *" upgrade"*) echo plain ;;
-        *) echo full ;;
-    esac
-}
-
 # The line for what a full upgrade would leave for later
 # Usage: _runner_deferred_line <names> <true when every one is being phased in>
 _runner_deferred_line() {
@@ -1589,7 +2065,11 @@ _runner_as_full_upgrade() {
     local list="$1" quiet="${2:-}" sim t kind word sel
     _RUNNER_LAST_DEFERRED=""
     _RUNNER_LAST_DEFERRED_PHASED=false
-    sim=$(pkgmgr_apt_upgrade_set "$(_runner_upgrade_kind)") || return 0
+    local kind_of
+    kind_of=$(pkgmgr_upgrade_kind)
+    # a command nudge does not simulate: the user's own command decides, as asked
+    [[ "$kind_of" != "unknown" ]] || return 0
+    sim=$(pkgmgr_apt_upgrade_set "$kind_of") || return 0
     _RUNNER_SIMULATED=true
     local -A inst=() phased=()
     while read -r kind word; do
@@ -1618,12 +2098,20 @@ _runner_as_full_upgrade() {
 
 # What the check held back is not ticked, whatever the scope; the menu says why
 _runner_hold_waiting() {
-    local -a held=()
-    [[ -n "$_RUNNER_HELD" ]] || return 0
-    read -ra held <<< "$_RUNNER_HELD"
-    select_set_targets system 0 "${held[@]}"
-    select_note_targets system "waiting for its download" "${held[@]}"
-    _runner_auto_off system "${held[@]}"
+    local -a held=() snaps=()
+    if [[ -n "$_RUNNER_HELD" ]]; then
+        read -ra held <<< "$_RUNNER_HELD"
+        select_set_targets system 0 "${held[@]}"
+        select_note_targets system "waiting for its download" "${held[@]}"
+        _runner_auto_off system "${held[@]}"
+    fi
+    if [[ -n "$_RUNNER_HELD_SNAP" ]]; then
+        read -ra snaps <<< "$_RUNNER_HELD_SNAP"
+        select_set_targets snap 0 "${snaps[@]}"
+        select_note_targets snap "waiting until it is closed" "${snaps[@]}"
+        _runner_auto_off snap "${snaps[@]}"
+    fi
+    return 0
 }
 
 # What this failure sets aside: the standard updates among the downloads that
@@ -1636,6 +2124,16 @@ _runner_aside_plan() {
     local list="$1" t
     local -a out=()
     [[ "${SET_ASIDE_STANDARD:-true}" == "true" ]] || return 0
+    # a snap whose app is running is not refreshed until it is closed: it waits
+    if [[ "$list" == "snap" && "${_RETRY_F_CAUSE[$list]:-}" == "snap-running" ]]; then
+        local -A on=()
+        while IFS= read -r t; do [[ -n "$t" ]] && on["$t"]=1; done < <(select_targets snap)
+        for t in ${_RETRY_F_CULPRITS[$list]:-}; do
+            [[ -n "${on[$t]:-}" ]] && out+=("$t")
+        done
+        printf '%s' "${out[*]:-}"
+        return 0
+    fi
     [[ -n "${_RETRY_F_UNFETCHED[$list]:-}" ]] || return 0
     select_is_atomic "$list" && return 0
     retry_cause_waits "${_RETRY_F_CAUSE[$list]:-unknown}" || return 0
@@ -1690,20 +2188,30 @@ _runner_aside_lines() {
     local verb="are"
     [[ "${#names[@]}" -eq 1 ]] && verb="is"
     echo ""
-    printf '    %b↷%b %s %s waiting%s: %s cannot be reached from here right now.\n' \
-        "${_TUI_INFO:-}" "${_TUI_RESET:-}" "$(_runner_names_line "${names[*]}")" "$verb" \
-        "${vias:+ for $(_runner_names_line "$vias")}" "$where"
+    if [[ "${_RUNNER_WAITING_CAUSE[$list]:-}" == "snap-running" ]]; then
+        printf '    %b↷%b %s %s waiting until %s closed: a running snap is not refreshed.\n' \
+            "${_TUI_INFO:-}" "${_TUI_RESET:-}" "$(_runner_names_line "${names[*]}")" "$verb" \
+            "$([[ "${#names[@]}" -eq 1 ]] && echo it is || echo they are)"
+    else
+        printf '    %b↷%b %s %s waiting%s: %s cannot be reached from here right now.\n' \
+            "${_TUI_INFO:-}" "${_TUI_RESET:-}" "$(_runner_names_line "${names[*]}")" "$verb" \
+            "${vias:+ for $(_runner_names_line "$vias")}" "$where"
+    fi
     local next=""
     if [[ "$others" -gt 1 ]]; then next="installing the other ${others} now."
     elif [[ "$others" -eq 1 ]]; then next="installing the other one now."
     elif [[ "$others" -eq 0 ]]; then next="nothing else to install."
     fi
+    local turn="standard updates wait their turn: they go in once they can be downloaded."
+    local turn_classic="Standard updates wait on the waiting list and go in once they can be downloaded."
+    if [[ "${_RUNNER_WAITING_CAUSE[$list]:-}" == "snap-running" ]]; then
+        turn="nudge refreshes $([[ "${#names[@]}" -eq 1 ]] && echo it || echo them) the next time it runs with $([[ "${#names[@]}" -eq 1 ]] && echo it || echo them) closed."
+        turn_classic="${turn^}"
+    fi
     if [[ "$personality" == "classic" ]]; then
-        printf '      %bStandard updates wait on the waiting list and go in once they can be downloaded.%s%b\n' \
-            "${_TUI_SHADOW:-}" "${next:+ ${next^}}" "${_TUI_RESET:-}"
+        printf '      %b%s%s%b\n' "${_TUI_SHADOW:-}" "$turn_classic" "${next:+ ${next^}}" "${_TUI_RESET:-}"
     else
-        printf '      %bstandard updates wait their turn: they go in once they can be downloaded.%s%b\n' \
-            "${_TUI_SHADOW:-}" "${next:+ $next}" "${_TUI_RESET:-}"
+        printf '      %b%s%s%b\n' "${_TUI_SHADOW:-}" "$turn" "${next:+ $next}" "${_TUI_RESET:-}"
     fi
 }
 
@@ -2051,8 +2559,25 @@ pkgmgr_run_upgrade_session() {
         fi
     done
 
-    if _runner_apply_all; then
+    _runner_measure_begin
+    local applied=0
+    _runner_apply_all || applied=1
+    _runner_measure_end
+    if [[ "$applied" -eq 0 ]]; then
         _runner_summary
+    else
+        _runner_partial_line
     fi
+    return 0
+}
+
+# After a failure: what did go in before it stopped, measured (nothing when nothing did)
+_runner_partial_line() {
+    local list n=0
+    for list in system flatpak snap; do
+        [[ -n "${_RUNNER_MEASURED[$list]:-}" ]] || continue
+        n=$((n + ${_RUNNER_M_CHANGED[$list]:-0} + ${_RUNNER_M_ADDED[$list]:-0}))
+    done
+    [[ "$n" -gt 0 ]] && _runner_result skip "$(_runner_updates_word "$n") did go in before it stopped."
     return 0
 }

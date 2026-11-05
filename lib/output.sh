@@ -204,13 +204,22 @@ json_emit() {
     "security": ${_JSON_DATA[updates_security]:-0},
     "critical": ${_JSON_DATA[updates_critical]:-0},
     "flatpak": ${_JSON_DATA[updates_flatpak]:-0},
-    "snap": ${_JSON_DATA[updates_snap]:-0}
+    "snap": ${_JSON_DATA[updates_snap]:-0},
+    "waiting": ${_JSON_DATA[updates_waiting]:-0},
+    "later": ${_JSON_DATA[updates_later]:-0},
+    "new_packages": ${_JSON_DATA[updates_new_packages]:-0},
+    "removals": ${_JSON_DATA[updates_removals]:-0}
   },
   "packages": ${_JSON_DATA[packages]:-[]},
   "selected": {
     "system": ${_JSON_DATA[selected_system]:-0},
     "flatpak": ${_JSON_DATA[selected_flatpak]:-0},
     "snap": ${_JSON_DATA[selected_snap]:-0}
+  },
+  "updated": {
+    "system": ${_JSON_DATA[updated_system]:-null},
+    "flatpak": ${_JSON_DATA[updated_flatpak]:-null},
+    "snap": ${_JSON_DATA[updated_snap]:-null}
   },
   "scope": ${_JSON_DATA[scope]:-null},
   "attempts": ${_JSON_DATA[attempts]:-1},

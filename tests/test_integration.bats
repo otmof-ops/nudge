@@ -10,23 +10,28 @@ setup() {
     PROJECT_DIR="$(dirname "$TEST_DIR")"
     NUDGE="$PROJECT_DIR/nudge.sh"
     unset _NUDGE_TRIGGER   # a shell opened in a window nudge started used to carry it
+    # no test reaches the real home: whatever a test does not point elsewhere lands here
+    _TEST_HOME=$(mktemp -d)
+    export HOME="$_TEST_HOME"
+    unset XDG_DATA_HOME XDG_CONFIG_HOME XDG_CACHE_HOME XDG_STATE_HOME NUDGE_STATE_DIR
 }
 
 teardown() {
     [[ -n "${_INTEGRATION_TMPDIR:-}" ]] && rm -rf "$_INTEGRATION_TMPDIR" || true
+    [[ -n "${_TEST_HOME:-}" ]] && rm -rf "$_TEST_HOME" || true
 }
 
-@test "nudge --version prints 2.5.0" {
+@test "nudge --version prints 2.6.0" {
     run "$NUDGE" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge 2.5.0" ]]
+    [[ "$output" == "nudge 2.6.0" ]]
 }
 
 @test "nudge --help prints usage with bunny mascot" {
     run "$NUDGE" --help
     [[ "$status" -eq 0 ]]
     [[ "$output" == *'(\__/)'* ]]
-    [[ "$output" == *"nudge 2.5.0"* ]]
+    [[ "$output" == *"nudge 2.6.0"* ]]
     [[ "$output" == *"Usage:"* ]]
     [[ "$output" == *"--dry-run"* ]]
     [[ "$output" == *"--json"* ]]
@@ -76,7 +81,7 @@ teardown() {
 @test "install.sh --version prints version via setup.sh" {
     run "$PROJECT_DIR/install.sh" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge setup 2.5.0" ]]
+    [[ "$output" == "nudge setup 2.6.0" ]]
 }
 
 @test "install.sh --help shows setup.sh flags" {
@@ -176,8 +181,36 @@ openssl/noble-security 3.0.13-0ubuntu3.16 amd64 [upgradable from: 3.0.13-0ubuntu
 vim/noble-updates 2:9.1.0016-1ubuntu7.9 amd64 [upgradable from: 2:9.1.0016-1ubuntu7.8]
 ROWS
 EOT
+    # apt's simulation of the upgrade: everything listed goes in, but what PHASED names
+    cat > "$_INTEGRATION_TMPDIR/bin/apt-get" <<'EOT'
+#!/bin/bash
+if [[ "$1" == "-s" ]]; then
+    if [[ -n "${PHASED:-}" ]]; then
+        echo "The following upgrades have been deferred due to phasing:"
+        echo "  ${PHASED}"
+    fi
+    apt list --upgradable 2>/dev/null | awk -F'[/ ]' -v ph=" ${PHASED:-} ${HELD:-} " \
+        'NR > 1 && $1 != "" && index(ph, " " $1 " ") == 0 { print "Inst " $1 " [old] (new Ubuntu:24.04/noble-updates [amd64])" }'
+    exit 0
+fi
+echo "apt-get $*" >> "${APT_LOG:-/dev/null}"
+exit 0
+EOT
+    printf '#!/bin/bash\n[[ "$1" == "showhold" ]] && for h in ${HELD:-}; do echo "$h"; done\nexit 0\n' > "$_INTEGRATION_TMPDIR/bin/apt-mark"
+    # what dpkg says is installed: a state file the mock upgrades move forward
+    export DPKG_STATE="$_INTEGRATION_TMPDIR/dpkg-state"
+    printf 'openssl\t3.0.13-0ubuntu3.15\nvim\t2:9.1.0016-1ubuntu7.8\nbash\t5.2.21-2ubuntu4\n' > "$DPKG_STATE"
+    printf '#!/bin/bash\nwhile IFS=$'"'"'\\t'"'"' read -r n v; do printf "ii \\t%%s\\t%%s\\n" "$n" "$v"; done < "$DPKG_STATE"\n' > "$_INTEGRATION_TMPDIR/bin/dpkg-query"
     chmod +x "$_INTEGRATION_TMPDIR/bin/"*
     export PATH="$_INTEGRATION_TMPDIR/bin:$PATH"
+}
+
+# The mock upgrade puts these at their new version, as dpkg would say
+_integration_installed() {
+    local n
+    for n in "$@"; do
+        sed -i "s/^${n}\t.*/${n}\t2-new/" "$DPKG_STATE"
+    done
 }
 
 # A kdialog that says Update Now, then picks a scope, and never agrees to a restart
@@ -263,7 +296,7 @@ _integration_terminal() {
     cp "$PROJECT_DIR"/lib/*.sh "$prefix/.local/lib/nudge/"
     run env -u NUDGE_LIB_DIR HOME="$_INTEGRATION_TMPDIR/elsewhere" "$prefix/.local/bin/nudge.sh" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge 2.5.0" ]]
+    [[ "$output" == "nudge 2.6.0" ]]
 }
 
 @test "flags that need a value or a parent flag are usage errors, not silent runs" {
@@ -387,7 +420,8 @@ EOT
     grep -qx 'Flatpak only  (1)' "$_INTEGRATION_TMPDIR/kdialog.log"
     [[ "$output" == *"update session"* ]]
     [[ "$output" == *"here we go!"* ]]
-    [[ "$output" == *"all done!"* ]]
+    # the mock flatpak cannot be measured: the summary claims no number
+    [[ "$output" == *"done! the package manager says it went through."* ]]
 }
 
 @test "a no at the package manager's own question is a decline, not a crash" {
@@ -435,7 +469,10 @@ case "${1:-}" in
         for n in ${BLOCKED}; do
             echo "E: Failed to fetch https://repo.example.org/pool/main/x/${n}/${n}_1.0_amd64.deb  Certificate verification failed: The certificate is NOT trusted." >&2
         done
-        [[ -n "${BLOCKED}" ]] || exit 0
+        if [[ -z "${BLOCKED}" ]]; then
+            for n in ${PENDING}; do sed -i "s/^${n}\t.*/${n}\t2-new/" "$DPKG_STATE"; done
+            exit 0
+        fi
         echo "E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?" >&2
         exit 100 ;;
 esac
@@ -511,7 +548,7 @@ EOT
     run ! grep -q 'full-upgrade' "$APT_LOG"
     [[ "$(tail -1 "$XDG_DATA_HOME/nudge/history.jsonl")" == *'"outcome":"NO_UPDATES","detail":"waiting: vim"'* ]]
     run "$NUDGE" --check-only
-    [[ "$output" == *"everything else is up to date · 1 waiting for a download"* ]]
+    [[ "$output" == *"nudge: 0 updates available"*"nothing to install now · 1 waiting for a download (nudge --waiting)"* ]]
     # once it answers, it is offered again, and going in takes it off the list
     export BLOCKED=""
     PROBE_CODE=206 run env DISPLAY=:0 KDE_SESSION_VERSION=5 _NUDGE_TRIGGER=login "$NUDGE"
@@ -546,11 +583,99 @@ EOT
     # the important one is never held back: the next run offers it again
     : > "$APT_LOG"
     PROBE_CODE=000 run bash -c "printf 'n\n' | env DISPLAY=:0 KDE_SESSION_VERSION=5 '$NUDGE' --check-only"
-    [[ "$output" == *"nudge: 1 updates available"*"1 waiting for a download"* ]]
+    [[ "$output" == *"nudge: 1 update available"*"1 waiting for a download"* ]]
     run ! grep -q 'probe .*openssl' "$APT_LOG"
     run "$NUDGE" --waiting --clear
     [[ "$output" == "Forgot 2 waiting update(s). nudge will offer them again." ]]
     [[ ! -e "$XDG_DATA_HOME/nudge/waiting.tsv" ]]
+}
+
+# apt that upgrades what APPLY names when the session runs its full upgrade
+_integration_upgrading_apt() {
+    cat > "$_INTEGRATION_TMPDIR/bin/apt" <<'EOT'
+#!/bin/bash
+case "${1:-}" in
+    list)
+        printf 'Listing...\n'
+        printf 'openssl/noble-security 3.0.13-0ubuntu3.16 amd64 [upgradable from: 3.0.13-0ubuntu3.15]\n'
+        printf 'vim/noble-updates 2:9.1.0016-1ubuntu7.9 amd64 [upgradable from: 2:9.1.0016-1ubuntu7.8]\n' ;;
+    full-upgrade)
+        for n in ${APPLY:-}; do sed -i "s/^${n}\t.*/${n}\t2-new/" "$DPKG_STATE"; done ;;
+esac
+exit 0
+EOT
+    chmod +x "$_INTEGRATION_TMPDIR/bin/apt"
+    # no sudo in the command: the mock apt answers all of it
+    printf 'UPDATE_COMMAND="apt update && apt full-upgrade"\n' >> "$XDG_CONFIG_HOME/nudge/nudge.conf"
+}
+
+@test "the dialog counts what the upgrade installs now; a phased update is not offered, and the note says it comes later" {
+    _integration_mocks
+    printf '#!/bin/bash\nprintf "%%s\\n" "$@" > "$KDIALOG_ARGS"\nexit 2\n' > "$_INTEGRATION_TMPDIR/bin/kdialog"
+    chmod +x "$_INTEGRATION_TMPDIR/bin/kdialog"
+    export KDIALOG_ARGS="$_INTEGRATION_TMPDIR/kdialog_args" PHASED="vim"
+    run env DISPLAY=:0 KDE_SESSION_VERSION=5 "$NUDGE"
+    [[ "$status" -eq 1 ]]
+    grep -q '1 update is ready' "$KDIALOG_ARGS"
+    grep -q 'openssl' "$KDIALOG_ARGS"
+    run ! grep -q 'vim' "$KDIALOG_ARGS"
+    grep -q '1 more comes later: the distribution is still phasing it in' "$KDIALOG_ARGS"
+    run "$NUDGE" --check-only
+    [[ "$output" == *"nudge: 1 update available"*"1 critical · 1 later (1 being phased in)"* ]]
+    run "$NUDGE" --check-only --json
+    [[ "$output" == *'"total": 1'* ]]
+    [[ "$output" == *'"later": 1'* && "$output" == *'"waiting": 0'* ]]
+    if command -v jq &>/dev/null; then
+        echo "$output" | jq -e '.updates.total == 1 and .updates.later == 1 and .updated.system == null' >/dev/null
+    fi
+    [[ "$output" != *'"name":"vim"'* ]]
+}
+
+@test "a login with only phased updates pending stays quiet and says why in the history" {
+    _integration_mocks
+    _integration_kdialog all
+    export PHASED="openssl vim"
+    run env DISPLAY=:0 KDE_SESSION_VERSION=5 _NUDGE_TRIGGER=login "$NUDGE"
+    [[ "$status" -eq 0 ]]
+    [[ ! -s "$_INTEGRATION_TMPDIR/kdialog.log" ]]
+    [[ "$(tail -1 "$XDG_DATA_HOME/nudge/history.jsonl")" == *'"outcome":"NO_UPDATES","detail":"later (2 being phased in): openssl vim"'* ]]
+    run "$NUDGE" --check-only
+    [[ "$output" == *"nudge: 0 updates available"*"nothing to install now · 2 later (2 being phased in)"* ]]
+}
+
+@test "the session says what really went in: all of it, some of it, or none of it" {
+    _integration_mocks
+    _integration_terminal
+    _integration_kdialog all
+    _integration_upgrading_apt
+    # all of it
+    APPLY="openssl vim" run env DISPLAY=:0 KDE_SESSION_VERSION=5 _NUDGE_TRIGGER=login "$NUDGE"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"all done! 2 updates went in."* ]]
+    [[ "$(tail -1 "$XDG_DATA_HOME/nudge/history.jsonl")" == *'"outcome":"APPLIED"'*'changed (system): 2 updated'* ]]
+    # some of it: apt left vim as it was
+    printf 'openssl\t3.0.13-0ubuntu3.15\nvim\t2:9.1.0016-1ubuntu7.8\n' > "$DPKG_STATE"
+    APPLY="openssl" run env DISPLAY=:0 KDE_SESSION_VERSION=5 _NUDGE_TRIGGER=login "$NUDGE"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"done! 1 update went in, 1 did not."* ]]
+    [[ "$output" == *"apt left these as they were: vim"* ]]
+    [[ "$(tail -1 "$XDG_DATA_HOME/nudge/history.jsonl")" == *'"outcome":"APPLIED"'*'changed (system): 1 updated; did not change (system): vim'* ]]
+    # none of it: nothing failed, nothing went in, and that is what it says
+    printf 'openssl\t3.0.13-0ubuntu3.15\nvim\t2:9.1.0016-1ubuntu7.8\n' > "$DPKG_STATE"
+    APPLY="" run env DISPLAY=:0 KDE_SESSION_VERSION=5 _NUDGE_TRIGGER=login "$NUDGE"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"nothing went in this time."* ]]
+    [[ "$output" == *"apt left these as they were: openssl, vim"* ]]
+    [[ "$output" != *"all done"* ]]
+    [[ "$(tail -1 "$XDG_DATA_HOME/nudge/history.jsonl")" == *'"outcome":"UNCHANGED"'*'did not change (system): openssl vim'*'"exit_code":0}' ]]
+    # an update on hold is left for later, and a hold is not waiting: still UNCHANGED
+    printf 'openssl\t3.0.13-0ubuntu3.15\nvim\t2:9.1.0016-1ubuntu7.8\n' > "$DPKG_STATE"
+    APPLY="" HELD="vim" run env DISPLAY=:0 KDE_SESSION_VERSION=5 _NUDGE_TRIGGER=login "$NUDGE"
+    [[ "$(tail -1 "$XDG_DATA_HOME/nudge/history.jsonl")" == *'"outcome":"UNCHANGED"'*'later (1 on hold): vim'*'did not change (system): openssl"'* ]]
+    # and an update being phased in is: WAITING
+    APPLY="" PHASED="vim" run env DISPLAY=:0 KDE_SESSION_VERSION=5 _NUDGE_TRIGGER=login "$NUDGE"
+    [[ "$(tail -1 "$XDG_DATA_HOME/nudge/history.jsonl")" == *'"outcome":"WAITING"'*'later (1 being phased in): vim'* ]]
+    [[ -z "$(ls -A "$XDG_DATA_HOME/nudge/crash-reports" 2>/dev/null)" ]]
 }
 
 @test "cancelling the scope picker is a decline at the selection menu" {
@@ -658,7 +783,8 @@ EOT
     [[ "$output" == *"the servers could not be reached"* ]]
     [[ "$output" == *"Try the failed ones again?"* ]]
     [[ "$output" == *"Attempt 2 of 3"* ]]
-    [[ "$output" == *"all done!"* ]]
+    # the mock flatpak cannot be measured: the summary claims no number
+    [[ "$output" == *"done! the package manager says it went through."* ]]
     grep -q '"outcome":"APPLIED"' "$XDG_DATA_HOME/nudge/history.jsonl"
     grep -q 'flatpak:ok (1/1)' "$XDG_DATA_HOME/nudge/history.jsonl"
     grep -q '; attempts: 2"' "$XDG_DATA_HOME/nudge/history.jsonl"

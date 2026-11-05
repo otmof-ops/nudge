@@ -2,11 +2,11 @@
 # SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/nudge)
 # SPDX-License-Identifier: BSD-3-Clause
 # nudge — A gentle nudge to keep your system fresh.
-# Version: 2.5.0
+# Version: 2.6.0
 
 set -euo pipefail
 
-NUDGE_VERSION="2.5.0"
+NUDGE_VERSION="2.6.0"
 _NUDGE_START_TIME=$(date +%s)
 _NUDGE_TRIGGER="${_NUDGE_TRIGGER:-manual}"
 case "$_NUDGE_TRIGGER" in
@@ -492,18 +492,39 @@ snap_count
 # --- What still waits for its download stays out of the count (lib/waiting.sh) ---
 # The list is read even when the count found nothing: what the waiting list
 # forgets is decided from the list itself, never from a count alone
-_NUDGE_LIST_BUILT=false
 if waiting_any; then
     # counted from the list, the list is already there
-    [[ "${PKG_COUNT_SOURCE:-list}" == "list" && -n "${PKG_UPDATE_LIST:-}" ]] || pkgmgr_list_updates
-    _NUDGE_LIST_BUILT=true
+    [[ "${PKG_LIST_READ:-false}" == "true" ]] || pkgmgr_list_updates
     waiting_hold_back
 fi
-json_set "updates_waiting" "${PKG_UPDATES_WAITING:-0}"
+json_set "updates_waiting" "$(( ${PKG_UPDATES_WAITING:-0} + ${PKG_SNAPS_WAITING:-0} ))"
+json_set "updates_later" "${PKG_UPDATES_LATER:-0}"
+json_set "updates_new_packages" "${PKG_APT_NEW:-0}"
+_NUDGE_REMOVALS=0
+[[ -n "${PKG_APT_REMOVE:-}" ]] && _NUDGE_REMOVALS=$(wc -w <<< "$PKG_APT_REMOVE")
+json_set "updates_removals" "$_NUDGE_REMOVALS"
 _WAITING_DETAIL=""
 if [[ "${PKG_UPDATES_WAITING:-0}" -gt 0 ]]; then
     _WAITING_DETAIL="waiting: $(waiting_held_targets)"
 fi
+if [[ "${PKG_SNAPS_WAITING:-0}" -gt 0 ]]; then
+    _WAITING_DETAIL+="${_WAITING_DETAIL:+; }waiting until closed: $(waiting_held_snaps)"
+fi
+if [[ "${PKG_UPDATES_LATER:-0}" -gt 0 ]]; then
+    _WAITING_DETAIL+="${_WAITING_DETAIL:+; }later ($(pkgmgr_later_summary)): $(cut -d'|' -f1 <<< "$PKG_LATER_LIST" | tr '\n' ' ' | sed 's/ $//')"
+fi
+
+# "firefox waits until it is closed" / "2 snaps wait until they are closed: a, b"
+_nudge_snaps_note() {
+    local names
+    names=$(waiting_held_snaps)
+    [[ -n "$names" ]] || return 0
+    if [[ "${PKG_SNAPS_WAITING:-0}" -eq 1 ]]; then printf '%s waits until it is closed' "$names"
+    else printf '%s snaps wait until they are closed: %s' "$PKG_SNAPS_WAITING" "${names// /, }"; fi
+}
+
+# "1 update", "3 updates"
+_nudge_updates() { if [[ "${1:-0}" -eq 1 ]]; then printf '1 update'; else printf '%s updates' "${1:-0}"; fi; }
 
 # --- Mark last check (a real run only) ---
 if [[ "$DRY_RUN" != "true" ]] && [[ "$CHECK_ONLY" != "true" ]]; then
@@ -531,10 +552,13 @@ if [[ "$TOTAL_UPDATES" -eq 0 ]]; then
     if [[ "$CHECK_ONLY" == "true" ]]; then
         if [[ "$_JSON_MODE" == "true" ]]; then
             json_emit "$EXIT_OK"
-        elif [[ "${PKG_UPDATES_WAITING:-0}" -gt 0 ]]; then
-            output_banner "nudge: 0 updates available" "everything else is up to date · ${PKG_UPDATES_WAITING} waiting for a download (nudge --waiting)"
         else
-            output_banner "nudge: 0 updates available" "everything is up to date"
+            _CHECK_DETAIL="everything is up to date"
+            [[ $(( ${PKG_UPDATES_WAITING:-0} + ${PKG_SNAPS_WAITING:-0} + ${PKG_UPDATES_LATER:-0} )) -gt 0 ]] && _CHECK_DETAIL="nothing to install now"
+            [[ "${PKG_UPDATES_WAITING:-0}" -gt 0 ]] && _CHECK_DETAIL+=" · ${PKG_UPDATES_WAITING} waiting for a download (nudge --waiting)"
+            [[ "${PKG_SNAPS_WAITING:-0}" -gt 0 ]] && _CHECK_DETAIL+=" · $(_nudge_snaps_note)"
+            [[ "${PKG_UPDATES_LATER:-0}" -gt 0 ]] && _CHECK_DETAIL+=" · ${PKG_UPDATES_LATER} later ($(pkgmgr_later_summary))"
+            output_banner "nudge: 0 updates available" "$_CHECK_DETAIL"
         fi
         exit "$EXIT_OK"
     fi
@@ -558,7 +582,7 @@ if [[ "$TOTAL_UPDATES" -eq 0 ]]; then
 fi
 
 # --- Package details (also computes the critical count) ---
-if [[ -z "$PKG_UPDATE_LIST" && "$_NUDGE_LIST_BUILT" != "true" ]]; then
+if [[ "${PKG_LIST_READ:-false}" != "true" ]]; then
     pkgmgr_list_updates
 fi
 json_set "updates_critical" "$PKG_UPDATES_CRITICAL"
@@ -579,7 +603,11 @@ if [[ "$CHECK_ONLY" == "true" ]]; then
         [[ "$_CHECK_CRIT" -gt 0 ]] && { [[ -n "$_CHECK_DETAIL" ]] && _CHECK_DETAIL+=" · "; _CHECK_DETAIL+="${_CHECK_CRIT} critical"; }
         [[ -z "$_CHECK_DETAIL" ]] && _CHECK_DETAIL="all standard priority"
         [[ "${PKG_UPDATES_WAITING:-0}" -gt 0 ]] && _CHECK_DETAIL+=" · ${PKG_UPDATES_WAITING} waiting for a download"
-        output_banner "nudge: ${_CHECK_TOTAL} updates available" "$_CHECK_DETAIL"
+        [[ "${PKG_SNAPS_WAITING:-0}" -gt 0 ]] && _CHECK_DETAIL+=" · $(_nudge_snaps_note)"
+        [[ "${PKG_UPDATES_LATER:-0}" -gt 0 ]] && _CHECK_DETAIL+=" · ${PKG_UPDATES_LATER} later ($(pkgmgr_later_summary))"
+        [[ "${PKG_APT_NEW:-0}" -gt 0 ]] && _CHECK_DETAIL+=" · ${PKG_APT_NEW} new"
+        [[ "${_NUDGE_REMOVALS:-0}" -gt 0 ]] && _CHECK_DETAIL+=" · ${_NUDGE_REMOVALS} to remove"
+        output_banner "nudge: $(_nudge_updates "$_CHECK_TOTAL") available" "$_CHECK_DETAIL"
     fi
     exit "$EXIT_OK"
 fi
@@ -605,7 +633,7 @@ DIALOG_QUOTE=$(bunny_say "prompt" "$TOTAL_UPDATES")
 DIALOG_MOOD=$(bunny_mood "prompt" "$_BUNNY_STREAK" "$TOTAL_UPDATES")
 DIALOG_HINT=""
 DIALOG_NOTE=""
-BUNNY_MSG=$(bunny_render "prompt" "nudge: ${_CHECK_TOTAL} updates · ${_CHECK_DETAIL}" "$TOTAL_UPDATES" "$DIALOG_QUOTE")
+BUNNY_MSG=$(bunny_render "prompt" "nudge: $(_nudge_updates "$_CHECK_TOTAL") · ${_CHECK_DETAIL}" "$TOTAL_UPDATES" "$DIALOG_QUOTE")
 MSG="${BUNNY_MSG}\n\nWould you like to update now?"
 if [[ "${SELECT_UPDATES:-true}" == "true" ]]; then
     DIALOG_HINT="You choose what to install next."
@@ -626,6 +654,21 @@ if [[ "${PKG_UPDATES_WAITING:-0}" -gt 0 ]]; then
     fi
     DIALOG_NOTE+="${DIALOG_NOTE:+  }${_WAITING_NOTE}"
     MSG+="\n${_WAITING_NOTE}"
+fi
+_LATER_NOTE=$(pkgmgr_later_note)
+if [[ -n "$_LATER_NOTE" ]]; then
+    DIALOG_NOTE+="${DIALOG_NOTE:+  }${_LATER_NOTE}"
+    MSG+="\n${_LATER_NOTE}"
+fi
+_SNAPS_NOTE=$(_nudge_snaps_note)
+if [[ -n "$_SNAPS_NOTE" ]]; then
+    DIALOG_NOTE+="${DIALOG_NOTE:+  }${_SNAPS_NOTE}"
+    MSG+="\n${_SNAPS_NOTE}"
+fi
+_PLAN_NOTE=$(pkgmgr_plan_note)
+if [[ -n "$_PLAN_NOTE" ]]; then
+    DIALOG_NOTE+="${DIALOG_NOTE:+  }${_PLAN_NOTE}"
+    MSG+="\n${_PLAN_NOTE}"
 fi
 
 if [[ -n "$SELFUPDATE_AVAILABLE" ]]; then
@@ -734,6 +777,15 @@ case "$NOTIFY_RESPONSE" in
             fi
         done
         [[ -n "$_WAITING_DETAIL" ]] && _UPG_DETAIL+="; held back, ${_WAITING_DETAIL}"
+        # what the session measured: what changed, and what was meant to and did not
+        for _upg_list in system flatpak snap; do
+            [[ -n "${_UPG_MEASURED[$_upg_list]:-}" ]] || continue
+            json_set "updated_${_upg_list}" "${_UPG_CHANGED[$_upg_list]:-0}"
+            _UPG_DETAIL+="; changed (${_upg_list}): ${_UPG_CHANGED[$_upg_list]:-0} updated"
+            [[ "${_UPG_ADDED[$_upg_list]:-0}" -gt 0 ]] && _UPG_DETAIL+=", ${_UPG_ADDED[$_upg_list]} new"
+            [[ "${_UPG_GONE[$_upg_list]:-0}" -gt 0 ]] && _UPG_DETAIL+=", ${_UPG_GONE[$_upg_list]} removed"
+            [[ -n "${_UPG_MISSED[$_upg_list]:-}" ]] && _UPG_DETAIL+="; did not change (${_upg_list}): ${_UPG_MISSED[$_upg_list]}"
+        done
         [[ "${_UPG_RETRY_DECLINED:-0}" == "1" ]] && _UPG_DETAIL+="; retry declined"
 
         if [[ "$_UPGRADE_RC" -eq 2 ]]; then
@@ -759,12 +811,22 @@ case "$NOTIFY_RESPONSE" in
             notify_failure_report "$_UPG_REPORT" || true
         fi
 
-        # Nothing failed, and nothing could go in: all of it waits for its download
+        # Nothing failed, and, measured, nothing changed: WAITING when something
+        # waits for its download or its turn, UNCHANGED when apt had nothing to do
         if [[ "$_UPGRADE_RC" -eq 4 ]]; then
-            log_info "Nothing to install now; the rest waits for its download: $_UPG_DETAIL"
+            # waiting is a download that cannot be fetched, a snap that is
+            # running, or an update the distribution is still phasing in; a
+            # hold or apt keeping something back is not waiting
+            _UPG_OUTCOME="UNCHANGED"
+            for _upg_list in system flatpak snap; do
+                [[ -n "${_UPG_WAITING[$_upg_list]:-}" ]] && _UPG_OUTCOME="WAITING"
+            done
+            [[ $(( ${PKG_UPDATES_WAITING:-0} + ${PKG_SNAPS_WAITING:-0} )) -gt 0 ]] && _UPG_OUTCOME="WAITING"
+            grep -q '|phased$' <<< "${PKG_LATER_LIST:-}" && _UPG_OUTCOME="WAITING"
+            log_info "Nothing went in, nothing failed ($_UPG_OUTCOME): $_UPG_DETAIL"
             _finalize
             json_emit "$EXIT_OK"
-            history_write "WAITING" "$_UPG_DETAIL" "$EXIT_OK"
+            history_write "$_UPG_OUTCOME" "$_UPG_DETAIL" "$EXIT_OK"
             exit "$EXIT_OK"
         fi
 
