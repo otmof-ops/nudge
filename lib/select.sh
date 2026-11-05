@@ -93,6 +93,78 @@ select_set_target() {
     return 0
 }
 
+# Usage: select_list_rows <list>  -> "target<TAB>sub<TAB>on<TAB>info" for every row, one pass
+select_list_rows() {
+    local list="$1" i
+    for i in "${!_SEL_LIST[@]}"; do
+        [[ "${_SEL_LIST[$i]}" == "$list" ]] || continue
+        printf '%s\t%s\t%s\t%s\n' "${_SEL_TARGET[$i]}" "${_SEL_SUB[$i]}" "${_SEL_ON[$i]}" "${_SEL_INFO[$i]:--}"
+    done
+}
+
+# Usage: select_set_targets <list> <0|1> <targets...>  (many rows by target, one pass)
+select_set_targets() {
+    local list="$1" value="$2" i t
+    shift 2
+    local -A named=()
+    for t in "$@"; do named["$t"]=1; done
+    [[ "${#named[@]}" -gt 0 ]] || return 0
+    for i in "${!_SEL_LIST[@]}"; do
+        [[ "${_SEL_LIST[$i]}" == "$list" && -n "${named[${_SEL_TARGET[$i]}]:-}" ]] || continue
+        _SEL_ON[$i]="$value"
+    done
+    return 0
+}
+
+# Usage: select_target_sub <list> <target>  -> its subcategory (critical, security, standard, ...)
+select_target_sub() {
+    local list="$1" target="$2" i
+    for i in "${!_SEL_LIST[@]}"; do
+        [[ "${_SEL_LIST[$i]}" == "$list" && "${_SEL_TARGET[$i]}" == "$target" ]] || continue
+        printf '%s' "${_SEL_SUB[$i]}"
+        return 0
+    done
+    return 1
+}
+
+# Usage: select_target_version <list> <target>  -> the version it goes to, from its info
+select_target_version() {
+    local list="$1" target="$2" i info
+    for i in "${!_SEL_LIST[@]}"; do
+        [[ "${_SEL_LIST[$i]}" == "$list" && "${_SEL_TARGET[$i]}" == "$target" ]] || continue
+        info="${_SEL_INFO[$i]}"
+        [[ "$info" == *"→ "* ]] || return 0
+        info="${info##*→ }"
+        printf '%s' "${info%% *}"
+        return 0
+    done
+    return 1
+}
+
+# Usage: select_note_targets <list> <note> <targets...>  (appended beside each label, one pass)
+select_note_targets() {
+    local list="$1" note="$2" i t
+    shift 2
+    local -A named=()
+    for t in "$@"; do named["$t"]=1; done
+    [[ "${#named[@]}" -gt 0 ]] || return 0
+    for i in "${!_SEL_LIST[@]}"; do
+        [[ "${_SEL_LIST[$i]}" == "$list" && -n "${named[${_SEL_TARGET[$i]}]:-}" ]] || continue
+        _SEL_INFO[$i]="${_SEL_INFO[$i]:+${_SEL_INFO[$i]} · }${note}"
+    done
+    return 0
+}
+
+# Usage: select_note_target <list> <target> <note>  (appended to what sits beside the label)
+select_note_target() {
+    local list="$1" target="$2" note="$3" i
+    for i in "${!_SEL_LIST[@]}"; do
+        [[ "${_SEL_LIST[$i]}" == "$list" && "${_SEL_TARGET[$i]}" == "$target" ]] || continue
+        _SEL_INFO[$i]="${_SEL_INFO[$i]:+${_SEL_INFO[$i]} · }${note}"
+    done
+    return 0
+}
+
 select_set_all() {
     local value="$1" i
     for i in "${!_SEL_ON[@]}"; do _SEL_ON[$i]="$value"; done

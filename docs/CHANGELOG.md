@@ -5,6 +5,69 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] — 2026-11-05
+
+What cannot be downloaded waits; it does not fail.
+
+### Added
+- **The waiting list.** A standard update whose download cannot be fetched
+  (the repository does not answer from this network, its certificate does not
+  verify, the mirror has not caught up) is set aside without a question, and
+  the rest of its list goes in straight away. The session ends "all done!"
+  with one quiet line naming what waits; when everything picked only waits it
+  says there is nothing to install right now and the history records
+  `WAITING` (exit 0), not `FAILED`. Waiting updates are kept in
+  `~/.local/share/nudge/waiting.tsv` with their severity, version, cause,
+  host and the dependency that holds them back, are not counted in the
+  failure ledger, and get no failure report or failure dialog.
+- **A new dependency nobody can download** holds back the selected updates
+  that need it (apt-cache rdepends); a standard one waits with the rest, and
+  the list says which dependency.
+- **Only a download that is not there to be had right now waits:** the
+  network, the repository, its certificate, the mirror, a file that did not
+  match. A full disk, a lock, sudo, or a server that wants credentials (401,
+  407) keep the question and the report, whatever the update.
+- **The check holds back what still waits.** Before the prompt nudge asks apt
+  where each waiting standard update's download comes from (one
+  `apt-get download --print-uris` for all of them) and fetches one byte of it
+  (`curl -r 0-0`, http and https only, redirects too, the certificate
+  verified, nothing written), checked against the size apt expects, so a
+  captive portal's or a block page's answer is not taken for the file. While
+  it does not answer, the update stays out of the count, the preview and the
+  dialog (which says how many wait), and a login with nothing else pending
+  stays quiet; in the menu it is shown unticked, "waiting for its download".
+  Once the download answers it is offered again, and going in takes it off
+  the list. One host that gets no answer at all is not asked again in the
+  same run, a hiccup gets one quick second go, and the probes of one login
+  take 20 seconds at most.
+- **A week after its last try, apt gets the last word again:** an update
+  whose probe says no rides along when something else is installed anyway (it
+  never makes a prompt by itself), and one nudge cannot probe (no curl or
+  wget; a proxy, a certificate store or credentials only apt has) is offered
+  again.
+- **Critical and security updates never wait.** They are listed on the
+  waiting list by severity, but they are offered every run, retried, counted
+  and reported as before.
+- `nudge --waiting` (`--json`, `--clear`) lists what waits, grouped Critical,
+  Security, Standard, with what each tier does.
+- `SET_ASIDE_STANDARD` (default `true`); `false` brings back the question for
+  standard updates too.
+- `--check-only` and the JSON output (`updates_waiting`) count what waits
+  apart from what is available.
+
+### Changed
+- **A selection nudge makes itself installs what a full upgrade would.** With
+  something held back, set aside or left out, the rest goes in as
+  `apt-get install --only-upgrade`, which would install updates the
+  distribution is still phasing in; the session now asks apt's own
+  simulation (`apt-get -s full-upgrade`, as the user) and leaves those for
+  later, as the full upgrade does. A selection of the user's own is left as
+  it is.
+- The second try does not refresh the package lists the first one refreshed
+  a moment before.
+- A session that leaves something important for later says nudge tries it
+  again next time.
+
 ## [2.4.0] — 2026-10-27
 
 What can be downloaded goes in; what cannot waits.
