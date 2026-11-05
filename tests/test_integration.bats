@@ -444,8 +444,14 @@ EOT
     cat > "$_INTEGRATION_TMPDIR/bin/apt-get" <<'EOT'
 #!/bin/bash
 if [[ "$1" == "download" && "$2" == "--print-uris" ]]; then
-    n="${4:-$3}"
-    printf "'https://repo.example.org/pool/main/x/%s/%s_1.0_amd64.deb' %s_1.0_amd64.deb 1000 SHA256:00\n" "$n" "$n" "$n"
+    for n in "${@:4}"; do
+        printf "'https://repo.example.org/pool/main/x/%s/%s_1.0_amd64.deb' %s_1.0_amd64.deb 1000 SHA256:00\n" "$n" "$n" "$n"
+    done
+    exit 0
+fi
+if [[ "$1" == "-s" ]]; then
+    # the simulation: every pending update would go in
+    for n in ${PENDING}; do printf 'Inst %s [1] (2 Ubuntu:24.04/noble-updates [amd64])\n' "$n"; done
     exit 0
 fi
 echo "apt-get $*" >> "$APT_LOG"
@@ -456,7 +462,8 @@ EOT
 for a in "$@"; do
     if [[ "$a" == "-r" ]]; then
         echo "probe ${*: -1}" >> "$APT_LOG"
-        printf '%s' "${PROBE_CODE:-000}"
+        [[ "${PROBE_CODE:-000}" == "206" ]] && printf 'HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-0/1000\r\n\r\n'
+        printf '\nnudge-code=%s\n' "${PROBE_CODE:-000}"
         exit 0
     fi
 done

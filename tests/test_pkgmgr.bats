@@ -602,6 +602,9 @@ _retry_runner_setup() {
     mkdir -p "$NUDGE_STATE_DIR"
     source "$PROJECT_DIR/lib/retry.sh"
     source "$PROJECT_DIR/lib/waiting.sh"
+    # apt is stood in for: no simulation to go by, no reverse dependencies
+    pkgmgr_apt_upgrade_set() { return 1; }
+    _retry_rdepends() { return 0; }
     _RUNNER_PKGMGR="apt"; DETECTED_PKGMGR="apt"; _RUNNER_SCOPE="all"
     _RUNNER_STATUS="$TMPDIR_TEST/status"
     : > "$_RUNNER_STATUS"
@@ -893,6 +896,238 @@ _no_other_lists() {
     _runner_load_session "$TMPDIR_TEST/sess2"
     [[ "$_RUNNER_HELD" == "ok-name" ]]
     rm -f "$sess"
+}
+
+# A system step that fails with the given lines while NAME is ticked
+_step_failing_with() {
+    echo "system: $(select_targets system | tr '\n' ' ')" >> "$TMPDIR_TEST/calls"
+    if [[ " $(select_targets system | tr '\n' ' ') " == *" ${NAME} "* ]]; then
+        printf '%s\n' "${LINES[@]}" >> "$_RUNNER_STEP_LOG"
+        _RUNNER_LAST_RC=100
+        _runner_status_write system failed
+        return 1
+    fi
+    _runner_status_write system ok
+    return 0
+}
+
+@test "a full disk is not a download that waits: the standard update fails loudly" {
+    _retry_runner_setup
+    select_reset
+    select_add system standard nordvpn nordvpn
+    select_add system standard vim vim
+    select_apply_scope all
+    NAME=nordvpn
+    LINES=("E: Failed to fetch https://repo.example.org/pool/nordvpn_6.0.1_amd64.deb  Error writing to output file - write (28: No space left on device)"
+           "E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?")
+    _runner_apply_system() { _step_failing_with; }
+    _no_other_lists
+    _runner_ask_retry() { echo "asked: $1" >> "$TMPDIR_TEST/calls"; return 1; }
+    run _runner_apply_all
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"the disk is full"* ]]
+    [[ "$output" != *"is waiting"* ]]
+    grep -q '^asked' "$TMPDIR_TEST/calls"
+    [[ -z "$(waiting_rows)" ]]
+    [[ -n "$(retry_ledger_rows)" ]]
+}
+
+@test "a server that wants credentials is not a download that waits" {
+    _retry_runner_setup
+    select_reset
+    select_add system standard proapp proapp
+    select_add system standard vim vim
+    select_apply_scope all
+    NAME=proapp
+    LINES=("E: Failed to fetch https://esm.example/pool/proapp_1.0_amd64.deb  401  Unauthorized [IP: 1.2.3.4 443]"
+           "E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?")
+    _runner_apply_system() { _step_failing_with; }
+    _no_other_lists
+    _runner_ask_retry() { echo "asked: $1" >> "$TMPDIR_TEST/calls"; return 1; }
+    run _runner_apply_all
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"could not download: proapp"* ]]
+    [[ "$output" != *"is waiting"* ]]
+    grep -qx 'asked: Try again without it?' "$TMPDIR_TEST/calls"
+    [[ -z "$(waiting_rows)" ]]
+}
+
+@test "a selected update that needs a new dependency nobody can download waits for it" {
+    _retry_runner_setup
+    select_reset
+    select_add system standard nordvpn-gui nordvpn-gui "5.4.0 → 6.0.1"
+    select_add system standard vim vim
+    select_apply_scope all
+    NAME=nordvpn-gui
+    LINES=("E: Failed to fetch https://repo.example.org/pool/libnord_2.0_amd64.deb  Could not resolve 'repo.example.org'"
+           "E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?")
+    _retry_rdepends() { [[ "$1" == "libnord" ]] && echo nordvpn-gui; return 0; }
+    _runner_apply_system() { _step_failing_with; }
+    _no_other_lists
+    _runner_ask_retry() { echo "asked: $1" >> "$TMPDIR_TEST/calls"; return 0; }
+    run _apply_and_summarise
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"nordvpn-gui is waiting for libnord: repo.example.org cannot be reached from here right now."* ]]
+    [[ "$output" == *"installing the other one now."* ]]
+    [[ "$(tail -1 "$TMPDIR_TEST/calls")" == "system: vim " ]]
+    run ! grep -q '^asked' "$TMPDIR_TEST/calls"
+    [[ "$(waiting_rows | cut -f2,3,4,10)" == $'nordvpn-gui\tstandard\t6.0.1\tlibnord:amd64' ]]
+    [[ -z "$(retry_ledger_rows)" ]]
+}
+
+@test "with SET_ASIDE_STANDARD=false only the important downloads go on the waiting list" {
+    _retry_runner_setup
+    SET_ASIDE_STANDARD=false
+    select_reset
+    select_add system security openssl openssl
+    select_add system standard nordvpn nordvpn
+    select_add system standard vim vim
+    select_apply_scope all
+    BLOCKED="openssl nordvpn"
+    _runner_apply_system() { _blocked_step; }
+    _no_other_lists
+    _runner_ask_retry() { echo "asked: $1" >> "$TMPDIR_TEST/calls"; return 1; }
+    run _runner_apply_all
+    [[ "$status" -eq 1 ]]
+    [[ "$(waiting_rows | cut -f2,3)" == $'openssl\tsecurity' ]]
+    [[ "$(retry_ledger_rows | cut -f2 | LC_ALL=C sort | tr '\n' ' ')" == "nordvpn openssl " ]]
+}
+
+@test "once the user has said no, the session does not ask again" {
+    _retry_runner_setup
+    select_reset
+    select_add system standard nordvpn nordvpn
+    select_add system standard vim vim
+    select_add flatpak app "Y" app/org.x.Y/x86_64/stable
+    select_apply_scope all
+    # the system list: the blocked download first, then a lock on the rest
+    _runner_apply_system() {
+        echo "system: $(select_targets system | tr '\n' ' ')" >> "$TMPDIR_TEST/calls"
+        if select_all_on system; then
+            echo "E: Failed to fetch https://repo.example.org/pool/nordvpn_6.0.1_amd64.deb  Could not resolve 'repo.example.org'" >> "$_RUNNER_STEP_LOG"
+        else
+            echo "E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 4321 (apt-get)" >> "$_RUNNER_STEP_LOG"
+        fi
+        _RUNNER_LAST_RC=100
+        _runner_status_write system failed
+        return 1
+    }
+    _runner_apply_flatpak() {
+        echo "error: Unable to load summary from remote flathub: Could not resolve hostname" >> "$_RUNNER_STEP_LOG"
+        _RUNNER_LAST_RC=1
+        _runner_status_write flatpak failed
+        return 1
+    }
+    _runner_apply_snap() { _runner_status_write snap skipped; return 0; }
+    _runner_ask_retry() { echo "asked: $1" >> "$TMPDIR_TEST/calls"; return 1; }
+    run _runner_apply_all
+    [[ "$status" -eq 1 ]]
+    [[ "$(grep -c '^asked' "$TMPDIR_TEST/calls")" -eq 1 ]]
+    # the rest of the system list still went on after the no, once
+    [[ "$(grep -c '^system:' "$TMPDIR_TEST/calls")" -eq 2 ]]
+    grep -qx 'retry_declined=1' "$_RUNNER_STATUS"
+}
+
+# The real system step with every command stood in for: nothing reaches sudo or apt
+_apt_partial_setup() {
+    _retry_runner_setup
+    source "$PROJECT_DIR/lib/config.sh"
+    UPDATE_COMMAND="sudo apt update && sudo apt full-upgrade"
+    _runner_run_step() { shift; echo "step: $*" >> "$TMPDIR_TEST/calls"; return 0; }
+    _runner_exec_command() { echo "full: $1" >> "$TMPDIR_TEST/calls"; return 0; }
+    pkgmgr_apt_upgrade_set() { echo "sim: $1" >> "$TMPDIR_TEST/calls"; printf '%s\n' "${SIM[@]}"; }
+    _no_other_lists
+}
+
+@test "a partial install nudge chose itself installs what the full upgrade would, phased updates left for later" {
+    _apt_partial_setup
+    select_reset
+    select_add system standard nordvpn nordvpn
+    select_add system standard vim vim
+    select_add system standard sqlite3 sqlite3
+    _RUNNER_HELD="nordvpn"
+    select_apply_scope all
+    _runner_hold_waiting
+    SIM=("inst nordvpn" "inst vim" "phased sqlite3")
+    run _runner_apply_system
+    [[ "$status" -eq 0 ]]
+    [[ "$(cat "$TMPDIR_TEST/calls")" == $'step: sudo apt-get update\nsim: full\nstep: sudo apt-get install --only-upgrade -- vim' ]]
+    [[ "$output" == *"still being phased in, so left for later as a full upgrade would: sqlite3"* ]]
+    # a pick of the user's own is theirs: no simulation, sqlite3 goes in as asked
+    : > "$TMPDIR_TEST/calls"
+    _RUNNER_AUTO_OFF=()
+    _runner_hold_waiting
+    select_set_target system vim 0
+    run _runner_apply_system
+    [[ "$(cat "$TMPDIR_TEST/calls")" == $'step: sudo apt-get update\nstep: sudo apt-get install --only-upgrade -- sqlite3' ]]
+}
+
+@test "when the full upgrade would install nothing now, nothing failed and the list waits" {
+    _apt_partial_setup
+    select_reset
+    select_add system standard nordvpn nordvpn
+    select_add system standard sqlite3 sqlite3
+    _RUNNER_HELD="nordvpn"
+    select_apply_scope all
+    _runner_hold_waiting
+    SIM=("inst nordvpn" "phased sqlite3")
+    _runner_apply_system
+    [[ "$(cat "$TMPDIR_TEST/calls")" == $'step: sudo apt-get update\nsim: full' ]]
+    [[ "$(grep '^system=' "$_RUNNER_STATUS" | tail -1)" == "system=waiting" ]]
+    run _runner_summary
+    [[ "$output" == *"nothing to install right now."* ]]
+    [[ "$output" == *"sqlite3 will come once the distribution has phased it in."* ]]
+}
+
+@test "the waiting line counts what will really go in: phased updates are not promised" {
+    _retry_runner_setup
+    select_reset
+    select_add system standard linux-firmware linux-firmware
+    select_add system standard sqlite3 sqlite3
+    select_add system standard libsqlite3-0 libsqlite3-0
+    select_apply_scope all
+    NAME=linux-firmware
+    LINES=("E: Failed to fetch http://au.archive.example/pool/linux-firmware_1_all.deb  Could not resolve 'au.archive.example'"
+           "E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?")
+    pkgmgr_apt_upgrade_set() { printf 'inst linux-firmware\nphased sqlite3\nphased libsqlite3-0\n'; }
+    _runner_apply_system() { _step_failing_with; }
+    _no_other_lists
+    run _apply_and_summarise
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"linux-firmware is waiting: au.archive.example cannot be reached from here right now."* ]]
+    [[ "$output" == *"nothing else to install."* ]]
+    [[ "$output" != *"installing the other"* ]]
+    [[ "$output" == *"still being phased in, so left for later as a full upgrade would: sqlite3, libsqlite3-0"* ]]
+    [[ "$output" == *"nothing to install right now."* ]]
+    [[ "$output" == *"linux-firmware will go in once it can be downloaded."* ]]
+    # one step only: nothing was left to run again
+    [[ "$(grep -c '^system:' "$TMPDIR_TEST/calls")" -eq 1 ]]
+    [[ "$(grep '^system=' "$_RUNNER_STATUS" | tail -1)" == "system=waiting" ]]
+}
+
+@test "the second try does not refresh the package lists the first one just refreshed" {
+    _apt_partial_setup
+    select_reset
+    select_add system standard nordvpn nordvpn
+    select_add system standard vim vim
+    select_apply_scope all
+    SIM=("inst vim" "inst nordvpn")
+    # the full upgrade: its refresh goes through, the download of nordvpn does not
+    _runner_exec_command() {
+        echo "full: $1" >> "$TMPDIR_TEST/calls"
+        _runner_is_apt_refresh /usr/bin/sudo apt update && _RUNNER_APT_FRESH=true
+        echo "E: Failed to fetch https://repo.example.org/pool/nordvpn_6.0.1_amd64.deb  Could not resolve 'repo.example.org'" >> "$_RUNNER_STEP_LOG"
+        _RUNNER_LAST_RC=100
+        return 1
+    }
+    run _apply_and_summarise
+    [[ "$status" -eq 0 ]]
+    [[ "$(cat "$TMPDIR_TEST/calls")" == $'full: sudo apt update && sudo apt full-upgrade\nsim: full\nstep: sudo apt-get install --only-upgrade -- vim' ]]
+    _runner_is_apt_refresh apt-get -q update
+    run _runner_is_apt_refresh apt-get install update
+    [[ "$status" -ne 0 ]]
+    run _runner_is_apt_refresh dnf update
+    [[ "$status" -ne 0 ]]
 }
 
 @test "sudo refusing the account ends the attempts; a mistyped password gets another go" {

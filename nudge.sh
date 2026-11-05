@@ -490,9 +490,13 @@ flatpak_count
 snap_count
 
 # --- What still waits for its download stays out of the count (lib/waiting.sh) ---
+# The list is read even when the count found nothing: what the waiting list
+# forgets is decided from the list itself, never from a count alone
 _NUDGE_LIST_BUILT=false
 if waiting_any; then
-    [[ "${PKG_UPDATES_TOTAL:-0}" -gt 0 ]] && { pkgmgr_list_updates; _NUDGE_LIST_BUILT=true; }
+    # counted from the list, the list is already there
+    [[ "${PKG_COUNT_SOURCE:-list}" == "list" && -n "${PKG_UPDATE_LIST:-}" ]] || pkgmgr_list_updates
+    _NUDGE_LIST_BUILT=true
     waiting_hold_back
 fi
 json_set "updates_waiting" "${PKG_UPDATES_WAITING:-0}"

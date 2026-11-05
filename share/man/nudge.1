@@ -34,12 +34,19 @@ are quoted as they are.
 A standard update whose download cannot be fetched (the repository does not
 answer from this network, its certificate does not verify, the mirror has not
 caught up) is not failing, it is waiting: the session sets it aside without a
-question, installs the rest, and keeps it on the waiting list. Before the next
+question, installs the rest, and keeps it on the waiting list; so does an
+update that needs a new dependency nobody can download. Only a download that
+is not there to be had right now waits: a full disk, a lock, sudo or a server
+that wants credentials keep the question and the report. Before the next
 prompt nudge asks apt where each waiting download comes from and fetches one
-byte of it; while it does not answer, the update stays out of the count and
-the dialog, and once it answers it is offered again. Critical and security
-updates are never set aside: they are offered, retried, counted and reported
-every run.
+byte of it, checked against the size apt expects; while it does not answer,
+the update stays out of the count and the dialog, and once it answers it is
+offered again. A week after its last try, apt gets the last word again: an
+update whose probe says no rides along when something else is installed
+anyway, and one nudge cannot probe is offered again. While something waits,
+the rest is installed as a selection of what a full upgrade would install, so
+phased updates stay for later. Critical and security updates are never set
+aside: they are offered, retried, counted and reported every run.
 .PP
 nudge supports multiple package managers (apt, dnf, pacman, zypper),
 Flatpak and Snap integration, multiple notification backends
@@ -341,7 +348,7 @@ The updates that keep failing: list, name, attempts, first and last failure, cau
 .TP
 .I ~/.local/share/nudge/waiting.tsv
 The updates that wait for their download: list, name, severity, version,
-cause, host, first and last try, tries.
+cause, host, first and last try, tries, and the dependency that holds it back.
 .TP
 .I ~/.local/share/nudge/reports/
 Failure reports (the newest 20).

@@ -161,7 +161,9 @@ _priority_rank() {
 # --- Count updates ---
 # apt uses update-notifier's apt-check when present (the count Ubuntu shows at
 # login); everything else counts the detailed list.
+PKG_COUNT_SOURCE="list"   # what the count came from: apt-check (no phased updates) or the list
 pkgmgr_count_updates() {
+    PKG_COUNT_SOURCE="list"
     PKG_UPDATES_TOTAL=0
     PKG_UPDATES_SECURITY=0
     PKG_UPDATES_CRITICAL=0
@@ -177,6 +179,8 @@ pkgmgr_count_updates() {
             if [[ "$apt_out" =~ ^[0-9]+\;[0-9]+$ ]]; then
                 PKG_UPDATES_TOTAL="${apt_out%%;*}"
                 PKG_UPDATES_SECURITY="${apt_out##*;}"
+                # shellcheck disable=SC2034  # read by lib/waiting.sh
+                PKG_COUNT_SOURCE="apt-check"
             else
                 [[ -x "$apt_check" ]] && log_warn "apt-check returned unexpected output, counting apt list instead"
                 pkgmgr_list_updates
@@ -312,6 +316,44 @@ pkgmgr_list_updates() {
 
     # Remove trailing newline
     PKG_UPDATE_LIST="${PKG_UPDATE_LIST%$'\n'}"
+}
+
+# --- What an apt upgrade would do, simulated as the user (nothing locked or changed) ---
+# Usage: pkgmgr_apt_upgrade_set [full|plain] -> "inst <target>" for each
+# package it would install or upgrade, "phased <target>" for each it defers
+# while the distribution phases it in; a target is name, or name:arch for
+# another architecture. 1 when apt cannot say.
+pkgmgr_apt_upgrade_set() {
+    local how="full-upgrade" native out line name arch in_phased=false
+    [[ "${1:-full}" == "plain" ]] && how="upgrade"
+    command -v apt-get >/dev/null 2>&1 || return 1
+    native=$(pkgmgr_native_arch)
+    out=$(LC_ALL=C timeout 60 apt-get -s -q -o Debug::NoLocking=1 "$how" 2>/dev/null) || return 1
+    local LC_ALL=C
+    while IFS= read -r line; do
+        if [[ "$line" == "The following upgrades have been deferred due to phasing:" ]]; then
+            in_phased=true
+            continue
+        fi
+        if [[ "$in_phased" == "true" ]]; then
+            if [[ "$line" == " "* ]]; then
+                for name in $line; do
+                    [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9+._-]*(:[A-Za-z0-9_-]+)?$ ]] || continue
+                    arch="${name#*:}"
+                    [[ "$name" == *:* && ( "$arch" == "$native" || "$arch" == "all" ) ]] && name="${name%%:*}"
+                    printf 'phased %s\n' "$name"
+                done
+                continue
+            fi
+            in_phased=false
+        fi
+        [[ "$line" =~ ^Inst\ ([A-Za-z0-9][A-Za-z0-9+._-]*)(:([A-Za-z0-9_-]+))?\  ]] || continue
+        name="${BASH_REMATCH[1]}"
+        arch="${BASH_REMATCH[3]}"
+        [[ -n "$arch" && "$arch" != "$native" && "$arch" != "all" ]] && name+=":${arch}"
+        printf 'inst %s\n' "$name"
+    done <<< "$out"
+    return 0
 }
 
 # --- The full-upgrade command (used when every system package is selected) ---
@@ -966,6 +1008,10 @@ declare -gA _RUNNER_LEFT=()        # per list: what this session left out becaus
 declare -gA _RUNNER_LEFT_CAUSE=()  # per list: the cause of the failure that left them out
 declare -gA _RUNNER_WAITING=()     # per list: standard updates set aside this session, waiting for their download
 declare -gA _RUNNER_WAITING_CAUSE=()
+declare -gA _RUNNER_AUTO_OFF=()    # per list: rows nudge unticked itself (held back, set aside, left out, deferred)
+declare -gA _RUNNER_DEFERRED=()    # per list: what a full upgrade would leave for later (the phased rollout)
+_RUNNER_APT_FRESH=false            # apt's package lists were refreshed in this session
+_RUNNER_SIMULATED=false            # the full upgrade's share was worked out since the last refresh
 _RUNNER_HELD=""                    # what the check held back before the session (the session's waiting= line)
 
 _runner_status_write() {
@@ -1163,6 +1209,23 @@ _runner_refused() {
 # package manager's "[Y/n]" is answered. Run from inside a `while read`
 # over the parsed text, a command would read that text's end instead, and
 # apt would print "Abort." and leave before anyone saw the question.
+# 0 when a command is apt refreshing its package lists (apt update, sudo apt-get -q update)
+_runner_is_apt_refresh() {
+    local -a w=("$@")
+    [[ "${#w[@]}" -gt 0 && "${w[0]##*/}" == "sudo" ]] && w=("${w[@]:1}")
+    [[ "${#w[@]}" -ge 2 ]] || return 1
+    case "${w[0]##*/}" in apt|apt-get) ;; *) return 1 ;; esac
+    local x seen=false
+    for x in "${w[@]:1}"; do
+        case "$x" in
+            -*) ;;
+            update) seen=true ;;
+            *) return 1 ;;
+        esac
+    done
+    [[ "$seen" == "true" ]]
+}
+
 _runner_exec_command() {
     local cmdline="$1" line
     local parsed
@@ -1187,6 +1250,7 @@ _runner_exec_command() {
             _runner_result fail "${line}: exit ${rc}"
             return 1
         fi
+        _runner_is_apt_refresh "${argv[@]}" && { _RUNNER_APT_FRESH=true; _RUNNER_SIMULATED=false; }
     done
     echo ""
     _runner_result ok "done"
@@ -1215,7 +1279,20 @@ _runner_apply_system() {
         mapfile -t pkgs < <(select_targets system)
         case "$_RUNNER_PKGMGR" in
             apt)
-                _runner_run_step "System packages: refresh" sudo apt-get update || ok=false
+                # the lists were refreshed a moment ago when an earlier try did it
+                if [[ "$_RUNNER_APT_FRESH" != "true" ]]; then
+                    _runner_run_step "System packages: refresh" sudo apt-get update || ok=false
+                    [[ "$ok" == "true" ]] && { _RUNNER_APT_FRESH=true; _RUNNER_SIMULATED=false; }
+                fi
+                if [[ "$ok" == "true" && "$_RUNNER_SIMULATED" != "true" ]] && _runner_auto_partial system; then
+                    _runner_as_full_upgrade system
+                    mapfile -t pkgs < <(select_targets system)
+                    if [[ "${#pkgs[@]}" -eq 0 ]]; then
+                        # nothing the full upgrade would install now: nothing failed, nothing went in
+                        _runner_status_write system waiting
+                        return 0
+                    fi
+                fi
                 if [[ "$ok" == "true" ]]; then
                     _runner_run_step "System packages: ${#pkgs[@]} selected" sudo apt-get install --only-upgrade -- "${pkgs[@]}" || ok=false
                 fi
@@ -1298,22 +1375,31 @@ _runner_scope_line() {
 # failures block and, when it keeps happening, the report). What waits is
 # said once, quietly; it is not a failure.
 _runner_summary() {
-    local list sel tot parts="" waiting=""
+    local list sel tot parts="" waiting="" later=""
     local personality="${BUNNY_PERSONALITY:-disney}"
     for list in system flatpak snap; do
         read -r sel tot <<< "$(select_count "$list")"
         [[ -n "${_RUNNER_WAITING[$list]:-}" ]] && waiting+="${waiting:+ }${_RUNNER_WAITING[$list]}"
+        [[ -n "${_RUNNER_DEFERRED[$list]:-}" ]] && later+="${later:+ }${_RUNNER_DEFERRED[$list]}"
         [[ "$sel" -gt 0 ]] || continue
         parts+="${parts:+ · }${_SEL_LIST_TITLE[$list]}: ${sel}"
     done
     echo ""
-    local -a w=()
+    local -a w=() d=() h=()
     read -ra w <<< "$waiting"
-    if [[ -z "$parts" && "${#w[@]}" -gt 0 ]]; then
+    read -ra d <<< "$later"
+    read -ra h <<< "$_RUNNER_HELD"
+    if [[ -z "$parts" && $(( ${#w[@]} + ${#d[@]} + ${#h[@]} )) -gt 0 ]]; then
         # nothing could go in this time, and nothing failed
         local msg="nothing to install right now." sub
-        sub="$(_runner_names_line "$waiting") will go in once $([[ "${#w[@]}" -eq 1 ]] && echo it || echo they) can be downloaded."
         [[ "$personality" == "classic" ]] && msg="Nothing to install right now."
+        if [[ "${#w[@]}" -gt 0 ]]; then
+            sub="$(_runner_names_line "$waiting") will go in once $([[ "${#w[@]}" -eq 1 ]] && echo it || echo they) can be downloaded."
+        elif [[ "${#d[@]}" -gt 0 ]]; then
+            sub="$(_runner_names_line "$later") will come once the distribution has phased $([[ "${#d[@]}" -eq 1 ]] && echo it || echo them) in."
+        else
+            sub="$(_runner_names_line "$_RUNNER_HELD") will go in once $([[ "${#h[@]}" -eq 1 ]] && echo it || echo they) can be downloaded."
+        fi
         _tui_bunny "$msg" "$sub" "${BUNNY_FACE_NORMAL:-}"
         return 0
     fi
@@ -1389,66 +1475,194 @@ _runner_step_failed() {
 # The waiting list (lib/waiting.sh): what cannot be downloaded right now
 # ============================================================
 
-# The severity of a target, as the waiting list keeps it
-_runner_severity() {
-    local sub
-    sub=$(select_target_sub "$1" "$2" 2>/dev/null) || sub=""
-    case "$sub" in
-        critical|security) printf '%s' "$sub" ;;
-        *) printf 'standard' ;;
-    esac
+# The subcategory (and the version it goes to) of each target of a list, in one pass
+# Usage: _runner_row_maps <list> <name of the sub map> [name of the version map]
+# shellcheck disable=SC2034  # the maps are the caller's, written through namerefs
+_runner_row_maps() {
+    local list="$1" rm_t rm_sub rm_info
+    local -n rm_subs="$2"
+    if [[ -n "${3:-}" ]]; then local -n rm_vers="$3"; fi
+    while IFS=$'\t' read -r rm_t rm_sub _ rm_info; do
+        [[ -n "$rm_t" ]] || continue
+        rm_subs["$rm_t"]="$rm_sub"
+        [[ -n "${3:-}" ]] || continue
+        rm_vers["$rm_t"]=""
+        if [[ "$rm_info" == *"→ "* ]]; then
+            rm_info="${rm_info##*→ }"
+            rm_vers["$rm_t"]="${rm_info%% *}"
+        fi
+    done < <(select_list_rows "$list")
 }
 
-# Every download of the list that failed goes on the waiting list, with its
-# severity, the version it was to bring and where it was to come from
+# Put targets of a list on the waiting list, with their severity, the version
+# they were to bring, where the download was to come from and the new
+# dependency that held them back. Usage: _runner_note_waiting <list> <targets...>
 _runner_note_waiting() {
-    local list="$1" t rows=""
-    [[ -n "${_RETRY_F_UNFETCHED[$list]:-}" ]] || return 0
+    local list="$1" t sev rows=""
+    shift
+    [[ $# -gt 0 ]] || return 0
     declare -F waiting_note >/dev/null 2>&1 || return 0
-    for t in ${_RETRY_F_UNFETCHED[$list]}; do
-        rows+="${t}|$(_runner_severity "$list" "$t")|$(select_target_version "$list" "$t" 2>/dev/null || true)|$(retry_unfetched_host "$t")"$'\n'
+    local -A nw_sub=() nw_ver=()
+    _runner_row_maps "$list" nw_sub nw_ver
+    for t in "$@"; do
+        case "${nw_sub[$t]:-}" in
+            critical|security) sev="${nw_sub[$t]}" ;;
+            *) sev="standard" ;;
+        esac
+        rows+="${t}|${sev}|${nw_ver[$t]:-}|$(retry_unfetched_host "$list" "$t")|$(retry_unfetched_via "$list" "$t")"$'\n'
     done
     printf '%s' "$rows" | waiting_note "$list" "${_RETRY_F_CAUSE[$list]:-unknown}" \
         || log_warn "The waiting list could not be written: ${WAITING_FILE:-}"
 }
 
+# The important downloads that failed because they are not there to be had
+# right now are listed too, by severity. They are not set aside: they keep
+# the question, the ledger and the report.
+_runner_note_important() {
+    local list="$1" t
+    local -a imp=()
+    [[ -n "${_RETRY_F_UNFETCHED[$list]:-}" ]] || return 0
+    retry_cause_waits "${_RETRY_F_CAUSE[$list]:-unknown}" || return 0
+    local -A ni_sub=()
+    _runner_row_maps "$list" ni_sub
+    for t in ${_RETRY_F_UNFETCHED[$list]}; do
+        retry_unfetched_auth "$list" "$t" && continue
+        case "${ni_sub[$t]:-}" in critical|security) imp+=("$t") ;; esac
+    done
+    _runner_note_waiting "$list" "${imp[@]}"
+}
+
+# Rows nudge unticked itself, as opposed to the user
+_runner_auto_off() {
+    local list="$1"
+    shift
+    [[ $# -gt 0 ]] || return 0
+    _RUNNER_AUTO_OFF["$list"]="${_RUNNER_AUTO_OFF[$list]:+${_RUNNER_AUTO_OFF[$list]} }$*"
+}
+
+# 0 when every unticked row of the list is one nudge unticked itself: the
+# user asked for all of it, and a partial install stands in for the full upgrade
+_runner_auto_partial() {
+    local list="$1" t sub on info any=false
+    [[ -n "${_RUNNER_AUTO_OFF[$list]:-}" ]] || return 1
+    local -A off=()
+    for t in ${_RUNNER_AUTO_OFF[$list]}; do off["$t"]=1; done
+    while IFS=$'\t' read -r t sub on info; do
+        [[ "$on" == "1" ]] && continue
+        [[ -n "${off[$t]:-}" ]] || return 1
+        any=true
+    done < <(select_list_rows "$list")
+    [[ "$any" == "true" ]]
+}
+
+# The kind of upgrade the configured command does: full (full-upgrade,
+# dist-upgrade, the default) or plain (upgrade)
+_runner_upgrade_kind() {
+    local cmd
+    cmd=$(_build_upgrade_cmd 2>/dev/null) || cmd=""
+    case "$cmd" in
+        *full-upgrade*|*dist-upgrade*) echo full ;;
+        *" upgrade"*) echo plain ;;
+        *) echo full ;;
+    esac
+}
+
+# The line for what a full upgrade would leave for later
+# Usage: _runner_deferred_line <names> <true when every one is being phased in>
+_runner_deferred_line() {
+    if [[ "$2" == "true" ]]; then
+        _runner_result skip "still being phased in, so left for later as a full upgrade would: $(_runner_names_line "$1")"
+    else
+        _runner_result skip "left for later as a full upgrade would: $(_runner_names_line "$1")"
+    fi
+}
+
+# A partial install that stands in for the full upgrade installs what the
+# full upgrade would, and no more: what it leaves for later (an update the
+# distribution is still phasing in) is unticked here too. Nothing changes
+# when apt cannot say. With "quiet", the line is the caller's to print
+# (_RUNNER_LAST_DEFERRED and _RUNNER_LAST_DEFERRED_PHASED say what).
+# Usage: _runner_as_full_upgrade <list> [quiet]
+_RUNNER_LAST_DEFERRED=""
+_RUNNER_LAST_DEFERRED_PHASED=false
+_runner_as_full_upgrade() {
+    local list="$1" quiet="${2:-}" sim t kind word sel
+    _RUNNER_LAST_DEFERRED=""
+    _RUNNER_LAST_DEFERRED_PHASED=false
+    sim=$(pkgmgr_apt_upgrade_set "$(_runner_upgrade_kind)") || return 0
+    _RUNNER_SIMULATED=true
+    local -A inst=() phased=()
+    while read -r kind word; do
+        case "$kind" in
+            inst)   inst["$word"]=1 ;;
+            phased) phased["$word"]=1 ;;
+        esac
+    done <<< "$sim"
+    local -a later=()
+    local all_phased=true
+    while IFS= read -r t; do
+        [[ -n "$t" && -z "${inst[$t]:-}" ]] || continue
+        later+=("$t")
+        [[ -n "${phased[$t]:-}" ]] || all_phased=false
+    done < <(select_targets "$list")
+    [[ "${#later[@]}" -gt 0 ]] || return 0
+    select_set_targets "$list" 0 "${later[@]}"
+    _runner_auto_off "$list" "${later[@]}"
+    _RUNNER_DEFERRED["$list"]="${_RUNNER_DEFERRED[$list]:+${_RUNNER_DEFERRED[$list]} }${later[*]}"
+    read -r sel _ <<< "$(select_count "$list")"
+    _runner_status_write "selected_${list}" "$sel"
+    _RUNNER_LAST_DEFERRED="${later[*]}"
+    _RUNNER_LAST_DEFERRED_PHASED="$all_phased"
+    [[ "$quiet" == "quiet" ]] || _runner_deferred_line "${later[*]}" "$all_phased"
+}
+
 # What the check held back is not ticked, whatever the scope; the menu says why
 _runner_hold_waiting() {
-    local t
+    local -a held=()
     [[ -n "$_RUNNER_HELD" ]] || return 0
-    for t in $_RUNNER_HELD; do
-        select_set_target system "$t" 0
-        select_note_target system "$t" "waiting for its download"
-    done
+    read -ra held <<< "$_RUNNER_HELD"
+    select_set_targets system 0 "${held[@]}"
+    select_note_targets system "waiting for its download" "${held[@]}"
+    _runner_auto_off system "${held[@]}"
 }
 
 # What this failure sets aside: the standard updates among the downloads that
-# failed, when another try could fetch them and the list can be applied in
-# part. Critical and security updates are never set aside. Space-separated.
+# failed, when the cause means the download is not there to be had right now
+# (the network, the repository, the mirror: not a full disk, a lock or sudo)
+# and the server did not want credentials. Critical and security updates are
+# never set aside, nor is anything on a list that only updates as a whole.
+# Space-separated.
 _runner_aside_plan() {
     local list="$1" t
     local -a out=()
     [[ "${SET_ASIDE_STANDARD:-true}" == "true" ]] || return 0
     [[ -n "${_RETRY_F_UNFETCHED[$list]:-}" ]] || return 0
     select_is_atomic "$list" && return 0
-    retry_cause_retriable "${_RETRY_F_CAUSE[$list]:-unknown}" || return 0
+    retry_cause_waits "${_RETRY_F_CAUSE[$list]:-unknown}" || return 0
+    local -A ap_sub=()
+    _runner_row_maps "$list" ap_sub
     for t in ${_RETRY_F_UNFETCHED[$list]}; do
-        [[ "$(_runner_severity "$list" "$t")" == "standard" ]] && out+=("$t")
+        retry_unfetched_auth "$list" "$t" && continue
+        case "${ap_sub[$t]:-standard}" in
+            critical|security) ;;
+            *) out+=("$t") ;;
+        esac
     done
     printf '%s' "${out[*]:-}"
 }
 
-# Set these aside: unticked, off the failure ledger, kept for the summary and
-# the launcher. 0 when that explains the whole failure of the list.
-# Usage: _runner_set_aside <list> <targets...>
+# Set these aside: unticked, on the waiting list, off the failure ledger,
+# kept for the summary and the launcher. 0 when that explains the whole
+# failure of the list. Usage: _runner_set_aside <list> <targets...>
 _runner_set_aside() {
-    local list="$1" t sel cause="${_RETRY_F_CAUSE[$1]:-unknown}" rc=1
+    local list="$1" sel cause="${_RETRY_F_CAUSE[$1]:-unknown}" rc=1
     shift
-    for t in "$@"; do
-        select_set_target "$list" "$t" 0
-    done
+    select_set_targets "$list" 0 "$@"
+    _runner_auto_off "$list" "$@"
     _RUNNER_WAITING["$list"]="${_RUNNER_WAITING[$list]:+${_RUNNER_WAITING[$list]} }$*"
     _RUNNER_WAITING_CAUSE["$list"]="$cause"
+    # noted while the failure's details are still there
+    _runner_note_waiting "$list" "$@"
     retry_set_aside "$list" "$@" && rc=0
     read -r sel _ <<< "$(select_count "$list")"
     _runner_status_write "selected_${list}" "$sel"
@@ -1458,22 +1672,27 @@ _runner_set_aside() {
 }
 
 # The calm lines for what was set aside: what, why, and that nothing is needed
+# Usage: _runner_aside_lines <list> <others still to install, or -1> <names>
 _runner_aside_lines() {
     local list="$1" others="$2" personality="${BUNNY_PERSONALITY:-disney}"
     local -a names=()
     read -ra names <<< "$3"
-    local host="" t
+    local host="" t v vias=""
     for t in "${names[@]}"; do
-        host=$(retry_unfetched_host "$t")
-        [[ -n "$host" ]] && break
+        [[ -z "$host" ]] && host=$(retry_unfetched_host "$list" "$t")
+        v=$(retry_unfetched_via "$list" "$t")
+        v="${v%%:*}"
+        [[ -n "$v" && " $vias " != *" $v "* ]] && vias+="${vias:+ }${v}"
     done
     local where="their source"
     [[ "${#names[@]}" -eq 1 ]] && where="its source"
     [[ -n "$host" ]] && where="$host"
+    local verb="are"
+    [[ "${#names[@]}" -eq 1 ]] && verb="is"
     echo ""
-    printf '    %b↷%b %s %s waiting: %s cannot be reached from here right now.\n' \
-        "${_TUI_INFO:-}" "${_TUI_RESET:-}" "$(_runner_names_line "${names[*]}")" \
-        "$([[ "${#names[@]}" -eq 1 ]] && echo is || echo are)" "$where"
+    printf '    %b↷%b %s %s waiting%s: %s cannot be reached from here right now.\n' \
+        "${_TUI_INFO:-}" "${_TUI_RESET:-}" "$(_runner_names_line "${names[*]}")" "$verb" \
+        "${vias:+ for $(_runner_names_line "$vias")}" "$where"
     local next=""
     if [[ "$others" -gt 1 ]]; then next="installing the other ${others} now."
     elif [[ "$others" -eq 1 ]]; then next="installing the other one now."
@@ -1604,11 +1823,10 @@ _runner_leave_out_plan() {
 # Untick what could not be downloaded, and keep it for the summary and the launcher
 # Usage: _runner_leave_out <list> <targets...>
 _runner_leave_out() {
-    local list="$1" t sel
+    local list="$1" sel
     shift
-    for t in "$@"; do
-        select_set_target "$list" "$t" 0
-    done
+    select_set_targets "$list" 0 "$@"
+    _runner_auto_off "$list" "$@"
     _RUNNER_LEFT["$list"]="${_RUNNER_LEFT[$list]:+${_RUNNER_LEFT[$list]} }$*"
     _RUNNER_LEFT_CAUSE["$list"]="${_RETRY_F_CAUSE[$list]:-unknown}"
     read -r sel _ <<< "$(select_count "$list")"
@@ -1621,7 +1839,7 @@ _runner_leave_out() {
 # update that cannot be downloaded is set aside without a question, and the
 # rest of its list goes in: that is not a failure, and is not shown as one.
 _runner_apply_all() {
-    local attempt=1 max="${RETRY_MAX_ATTEMPTS:-3}" done_lists=" " given_up=" " failed="" list
+    local attempt=1 max="${RETRY_MAX_ATTEMPTS:-3}" done_lists=" " given_up=" " failed="" list said_no=false
     [[ "$max" =~ ^[0-9]+$ && "$max" -ge 1 ]] || max=3
     _runner_status_write attempts 1
     while :; do
@@ -1646,9 +1864,15 @@ _runner_apply_all() {
             aside=$(_runner_aside_plan "$list")
             if [[ -n "$aside" ]]; then
                 read -ra anames <<< "$aside"
-                read -r sel tot <<< "$(select_count "$list")"
                 if _runner_set_aside "$list" "${anames[@]}"; then
-                    _runner_aside_lines "$list" "$((sel - ${#anames[@]}))" "$aside"
+                    # what the rest really is: the full upgrade's share of it
+                    _RUNNER_LAST_DEFERRED=""
+                    if [[ "$list" == "system" && "$_RUNNER_PKGMGR" == "apt" ]] && select_any_on "$list" && _runner_auto_partial "$list"; then
+                        _runner_as_full_upgrade "$list" quiet
+                    fi
+                    read -r sel tot <<< "$(select_count "$list")"
+                    _runner_aside_lines "$list" "$sel" "$aside"
+                    [[ -n "$_RUNNER_LAST_DEFERRED" ]] && _runner_deferred_line "$_RUNNER_LAST_DEFERRED" "$_RUNNER_LAST_DEFERRED_PHASED"
                     if select_any_on "$list"; then
                         resume+="$list "
                     else
@@ -1662,6 +1886,7 @@ _runner_apply_all() {
             still+="$list "
         done
         failed="$still"
+        for list in $failed; do _runner_note_important "$list"; done
 
         if [[ -z "$failed" ]]; then
             [[ -n "$resume" ]] || break
@@ -1683,7 +1908,8 @@ _runner_apply_all() {
             retry_cause_retriable "${_RETRY_F_CAUSE[$list]:-unknown}" && retriable=true
             plan["$list"]=$(_runner_leave_out_plan "$list")
         done
-        [[ "$attempt" -lt "$max" && "${RETRY_ASK:-true}" == "true" && "$retriable" == "true" ]] && ask=true
+        # once the user has said no, the session does not ask again
+        [[ "$attempt" -lt "$max" && "${RETRY_ASK:-true}" == "true" && "$retriable" == "true" && "$said_no" == "false" ]] && ask=true
         if [[ "$ask" == "true" ]]; then
             # An update that cannot be downloaded holds a full upgrade back with
             # it: the next try leaves those out and installs the rest
@@ -1716,6 +1942,7 @@ _runner_apply_all() {
                 done
             else
                 _runner_status_write retry_declined 1
+                said_no=true
                 ask=false
             fi
         fi
