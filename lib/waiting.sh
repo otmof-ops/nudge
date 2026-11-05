@@ -24,6 +24,8 @@ WAITING_PROBE_BUDGET=20  # seconds all the probes of one run may take
 # What the check found (set by waiting_hold_back)
 PKG_WAITING_LIST=""      # the rows held back, in PKG_UPDATE_LIST's format
 PKG_UPDATES_WAITING=0    # how many
+PKG_WAITING_SNAP_LIST="" # the snaps held back while their app runs, in PKG_SNAP_LIST's format
+PKG_SNAPS_WAITING=0      # how many
 _WAITING_LAST_CODE=""    # the HTTP status of the last probe ("000": no answer at all)
 
 declare -gA _WAITING_SEV_TITLE=([critical]="Critical" [security]="Security" [standard]="Standard")
@@ -270,15 +272,7 @@ _waiting_stale() {
 
 # The target an update row is called by: name, or name:arch for another architecture
 # Usage: _waiting_row_target <row> <native arch>
-_waiting_row_target() {
-    local name arch native="${2:-}"
-    IFS='|' read -r name _ _ _ arch _ <<< "$1"
-    if [[ -n "$arch" && -n "$native" && "$arch" != "$native" && "$arch" != "all" && "${DETECTED_PKGMGR:-}" == "apt" ]]; then
-        printf '%s:%s' "$name" "$arch"
-    else
-        printf '%s' "$name"
-    fi
-}
+_waiting_row_target() { pkgmgr_row_target "$@"; }
 
 # ============================================================
 # The check: hold back what is still waiting
@@ -294,6 +288,66 @@ _waiting_row_target() {
 waiting_hold_back() {
     PKG_WAITING_LIST=""
     PKG_UPDATES_WAITING=0
+    PKG_WAITING_SNAP_LIST=""
+    PKG_SNAPS_WAITING=0
+    waiting_any || return 0
+    _waiting_hold_back_snaps
+    _waiting_hold_back_system
+}
+
+# 0 while a process of the snap's own runs (snap apps run from /snap/<name>/)
+_waiting_snap_running() {
+    local LC_ALL=C
+    [[ "${1:-}" =~ ^[a-z0-9][a-z0-9-]{0,39}$ ]] || return 1
+    pgrep -f "^/snap/${1}/" >/dev/null 2>&1
+}
+
+# Snaps on the waiting list because snapd refused them while their app ran:
+# while it still runs, the snap stays out of the count and the dialog (snapd
+# would refuse it again). The evidence is snapd's own refusal, never a guess:
+# a snap that never was refused (snapd itself, a base) is never held back.
+_waiting_hold_back_snaps() {
+    local l t s v c h f la n via line name
+    [[ -n "$(_waiting_read | awk -F'\t' '$1 == "snap"' | head -n 1)" ]] || return 0
+    # a snap that waited goes once it is no longer pending
+    cut -d'|' -f1 <<< "${PKG_SNAP_LIST:-}" | waiting_keep_pending snap \
+        || log_warn "The waiting list could not be written: $WAITING_FILE"
+    [[ -n "${PKG_SNAP_LIST:-}" && "${SET_ASIDE_STANDARD:-true}" == "true" ]] || return 0
+    local -A running=()
+    while IFS=$'\t' read -r l t s v c h f la n via; do
+        [[ "$l" == "snap" && "$c" == "snap-running" ]] || continue
+        _waiting_snap_running "$t" && running["$t"]=1
+    done < <(_waiting_read)
+    [[ "${#running[@]}" -gt 0 ]] || return 0
+    local kept=""
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        name="${line%%|*}"
+        if [[ -n "${running[$name]:-}" ]]; then
+            PKG_WAITING_SNAP_LIST+="${line}"$'\n'
+            PKG_SNAPS_WAITING=$((PKG_SNAPS_WAITING + 1))
+        else
+            kept+="${line}"$'\n'
+        fi
+    done <<< "$PKG_SNAP_LIST"
+    PKG_SNAP_LIST="${kept%$'\n'}"
+    PKG_WAITING_SNAP_LIST="${PKG_WAITING_SNAP_LIST%$'\n'}"
+    PKG_UPDATES_SNAP=$(( ${PKG_UPDATES_SNAP:-0} - PKG_SNAPS_WAITING ))
+    [[ "$PKG_UPDATES_SNAP" -lt 0 ]] && PKG_UPDATES_SNAP=0
+    log_info "Held back ${PKG_SNAPS_WAITING} snap(s) whose app is still running"
+    return 0
+}
+
+# The snaps held back, space-separated (the session file's waiting_snap= line)
+waiting_held_snaps() {
+    [[ -n "${PKG_WAITING_SNAP_LIST:-}" ]] || return 0
+    cut -d'|' -f1 <<< "$PKG_WAITING_SNAP_LIST" | tr '\n' ' ' | sed 's/ $//'
+}
+
+# The system part of the check (see waiting_hold_back)
+_waiting_hold_back_system() {
+    PKG_WAITING_LIST=""
+    PKG_UPDATES_WAITING=0
     waiting_any || return 0
     local native line t
     native=$(pkgmgr_native_arch 2>/dev/null) || native=""
@@ -305,7 +359,12 @@ waiting_hold_back() {
         pend_targets+=("$t")
         row_of["$t"]="$line"
     done <<< "${PKG_UPDATE_LIST:-}"
-    printf '%s\n' "${pend_targets[@]}" | waiting_keep_pending system \
+    # what the upgrade leaves for later is still pending, and keeps its row
+    local -a still=("${pend_targets[@]}")
+    while IFS='|' read -r t _; do
+        [[ -n "$t" ]] && still+=("$t")
+    done <<< "${PKG_LATER_LIST:-}"
+    printf '%s\n' "${still[@]}" | waiting_keep_pending system \
         || log_warn "The waiting list could not be written: $WAITING_FILE"
     [[ "${#pend_targets[@]}" -gt 0 ]] || return 0
     [[ "${SET_ASIDE_STANDARD:-true}" == "true" ]] || return 0
@@ -402,33 +461,11 @@ waiting_hold_back() {
     return 0
 }
 
-# The count without what is held back. apt-check counts what a full upgrade
-# would install, which leaves phased updates out while the list has them, so
-# only what the upgrade would install is taken off; and when nothing that is
-# still offered would go in, there is nothing to offer.
+# The count without what is held back: every row offered is one the upgrade
+# installs now (pkgmgr_list_updates), so what is held back simply comes off
 # Usage: _waiting_recount <native arch> [offered targets...]
 _waiting_recount() {
-    local native="$1" total="${PKG_UPDATES_TOTAL:-0}" sim t line
-    shift
-    if [[ "${PKG_COUNT_SOURCE:-list}" == "apt-check" ]] && declare -F pkgmgr_apt_upgrade_set >/dev/null 2>&1 \
-        && sim=$(pkgmgr_apt_upgrade_set full); then
-        local -A inst=()
-        local kind
-        while read -r kind t; do [[ "$kind" == "inst" && -n "$t" ]] && inst["$t"]=1; done <<< "$sim"
-        local counted=0 offerable=0
-        while IFS= read -r line; do
-            [[ -n "$line" ]] || continue
-            t=$(_waiting_row_target "$line" "$native")
-            [[ -n "${inst[$t]:-}" ]] && counted=$((counted + 1))
-        done <<< "$PKG_WAITING_LIST"
-        for t in "$@"; do
-            [[ -n "${inst[$t]:-}" ]] && offerable=$((offerable + 1))
-        done
-        total=$((total - counted))
-        [[ "$offerable" -eq 0 ]] && total=0
-    else
-        total=$((total - PKG_UPDATES_WAITING))
-    fi
+    local total=$(( ${PKG_UPDATES_TOTAL:-0} - PKG_UPDATES_WAITING ))
     [[ "$total" -lt 0 ]] && total=0
     PKG_UPDATES_TOTAL="$total"
 }
@@ -467,6 +504,7 @@ _waiting_why() {
         network)          out="${where} could not be reached" ;;
         mirror-stale)     out="${where} has not caught up yet" ;;
         index-corrupt)    out="${where} sent a file that did not match" ;;
+        snap-running)     out="waits until it is closed: a running snap is not refreshed" ;;
         *)                out="${where}: the download failed" ;;
     esac
     [[ "$via" != "-" ]] && out+=" (it needs ${via%%:*})"

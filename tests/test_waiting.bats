@@ -219,32 +219,30 @@ _age_rows() {
     [[ "$PKG_UPDATES_WAITING" -eq 0 ]]
 }
 
-@test "counted by apt-check, only what the upgrade would install comes off the count" {
+@test "what is held back comes off the count, and what the upgrade leaves for later keeps its row" {
     _note repo-tls "nordvpn|standard|||" "sqlite3|standard|||"
-    PKG_COUNT_SOURCE="apt-check"
-    # apt-check counted nordvpn and the firmware; sqlite3 is phased, so it did not
-    pkgmgr_apt_upgrade_set() { printf 'inst nordvpn\ninst linux-firmware\nphased sqlite3\n'; }
     _fetch_says
-    PKG_UPDATE_LIST=$'nordvpn|1|2|STANDARD|amd64|0\nsqlite3|1|2|STANDARD|amd64|0\nlinux-firmware|1|2|STANDARD|all|0'
+    # sqlite3 is being phased in: not offered, not probed, but still pending
+    PKG_UPDATE_LIST=$'nordvpn|1|2|STANDARD|amd64|0\nlinux-firmware|1|2|STANDARD|all|0'
+    PKG_LATER_LIST="sqlite3|phased"
     PKG_UPDATES_TOTAL=2
     FETCH=1 waiting_hold_back
-    [[ "$PKG_UPDATES_WAITING" -eq 2 ]]
-    [[ "$PKG_UPDATES_TOTAL" -eq 1 ]]
-    # when nothing still offered would go in, there is nothing to offer
-    PKG_UPDATE_LIST=$'nordvpn|1|2|STANDARD|amd64|0\nsqlite3|1|2|STANDARD|amd64|0'
+    [[ "$PKG_UPDATES_WAITING" -eq 1 && "$PKG_UPDATES_TOTAL" -eq 1 ]]
+    [[ "$PKG_UPDATE_LIST" == "linux-firmware|1|2|STANDARD|all|0" ]]
+    [[ "$(_probes)" == "https://repo.example.org/pool/nordvpn_1.0_amd64.deb" ]]
+    [[ "$(waiting_rows | cut -f2 | LC_ALL=C sort | tr '\n' ' ')" == "nordvpn sqlite3 " ]]
+}
+
+@test "a snap that waited goes once it is no longer pending" {
+    printf 'firefox|standard|159.0.1||\n' | waiting_note snap snap-running
+    PKG_UPDATE_LIST="vim|1|2|STANDARD|amd64|0"
     PKG_UPDATES_TOTAL=1
-    pkgmgr_apt_upgrade_set() { printf 'inst nordvpn\nphased sqlite3\n'; }
-    rm -f "$WAITING_FILE"
-    _note repo-tls "nordvpn|standard|||"
-    FETCH=1 waiting_hold_back
-    [[ "$PKG_UPDATES_WAITING" -eq 1 && "$PKG_UPDATES_TOTAL" -eq 0 ]]
-    [[ "$PKG_UPDATE_LIST" == "sqlite3|1|2|STANDARD|amd64|0" ]]
-    # apt-check also counted a new package the held update would bring: still nothing to offer
-    PKG_UPDATE_LIST=$'nordvpn|1|2|STANDARD|amd64|0\nsqlite3|1|2|STANDARD|amd64|0'
-    PKG_UPDATES_TOTAL=2
-    pkgmgr_apt_upgrade_set() { printf 'inst nordvpn\ninst libnord\nphased sqlite3\n'; }
-    FETCH=1 waiting_hold_back
-    [[ "$PKG_UPDATES_WAITING" -eq 1 && "$PKG_UPDATES_TOTAL" -eq 0 ]]
+    PKG_SNAP_LIST="firefox|159.0.1|9171|299MB|mozilla"
+    waiting_hold_back
+    [[ "$(waiting_rows | cut -f1,2)" == $'snap\tfirefox' ]]
+    PKG_SNAP_LIST=""
+    waiting_hold_back
+    [[ -z "$(waiting_rows)" ]]
 }
 
 @test "what the update is now decides: a standard one that became critical is offered" {

@@ -1,4 +1,4 @@
-.TH NUDGE 1 "November 2026" "nudge 2.5.0" "User Commands"
+.TH NUDGE 1 "November 2026" "nudge 2.6.0" "User Commands"
 .SH NAME
 nudge \- a gentle nudge to keep your system fresh
 .SH SYNOPSIS
@@ -47,6 +47,16 @@ anyway, and one nudge cannot probe is offered again. While something waits,
 the rest is installed as a selection of what a full upgrade would install, so
 phased updates stay for later. Critical and security updates are never set
 aside: they are offered, retried, counted and reported every run.
+.PP
+What the dialog counts is what the configured upgrade installs now: for apt,
+nudge asks apt's own simulation of it (\fBapt-get -s full-upgrade\fR, or
+\fBupgrade\fR for a plain upgrade), so the number, the names and the session
+are one set. An update the distribution is still phasing in, one on hold or one
+apt keeps back is not offered; the dialog says it comes later, and says what
+the upgrade installs or removes besides. A custom \fBUPDATE_COMMAND\fR nudge does
+not recognise is not simulated. The closing lines and the history are
+measured from the installed versions before and after the session: how many
+updates went in, and by name any that were meant to and did not.
 .PP
 nudge supports multiple package managers (apt, dnf, pacman, zypper),
 Flatpak and Snap integration, multiple notification backends

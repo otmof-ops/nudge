@@ -28,6 +28,15 @@ teardown() {
     rm -rf "$TMPDIR_TEST"
 }
 
+# lib/config.sh once per test (it declares a readonly); it sets the state
+# directory to the real one, so a scratch one set before is set again after
+_source_config() {
+    local keep="${NUDGE_STATE_DIR:-}"
+    declare -F config_parse_update_command >/dev/null 2>&1 || source "$PROJECT_DIR/lib/config.sh"
+    [[ -n "$keep" ]] && export NUDGE_STATE_DIR="$keep"
+    return 0
+}
+
 @test "pkgmgr_detect respects PKGMGR_OVERRIDE" {
     PKGMGR_OVERRIDE="dnf"
     pkgmgr_detect
@@ -226,6 +235,8 @@ sudo/noble-updates,noble-security 1.9.15p5-3ubuntu5.24.04.4 amd64 [upgradable fr
 thermald/noble-updates 2.5.6-2ubuntu0.24.04.6 amd64 [upgradable from: 2.5.6-2ubuntu0.24.04.5]
 claude-desktop-unofficial/unknown 2.26454.2-3.3.9 amd64 [upgradable from: 2.7032.0-3.3.0]
 EOT'
+    _mock_apt_sim
+    _source_config
     PATH="$MOCK_BIN:$PATH"
     DETECTED_PKGMGR="apt"
     pkgmgr_list_updates
@@ -240,27 +251,171 @@ EOT'
     [[ "$PKG_UPDATES_CRITICAL" -eq 1 ]]
 }
 
-@test "apt counts fall back to the list when apt-check is absent" {
+# apt's simulation stood in for: every listed row goes in, but what PHASED names,
+# what HELD holds and what KEPT keeps back
+_mock_apt_sim() {
+    cat > "$MOCK_BIN/apt-get" <<'EOT'
+#!/bin/bash
+[[ "$1" == "-s" ]] || exit 0
+[[ -n "${SIM_FAILS:-}" ]] && exit 100
+if [[ -n "${PHASED:-}" ]]; then echo "The following upgrades have been deferred due to phasing:"; echo "  ${PHASED}"; fi
+apt list --upgradable 2>/dev/null | while IFS= read -r line; do
+    n="${line%%/*}"; a=$(awk '{print $3}' <<< "$line")
+    [[ -n "$n" && "$line" == *"[upgradable from:"* ]] || continue
+    [[ "$a" != "amd64" && "$a" != "all" ]] && n="$n:$a"
+    [[ " ${PHASED:-} ${HELD:-} ${KEPT:-} " == *" $n "* ]] && continue
+    echo "Inst $n [old] (new Ubuntu:24.04/noble-updates [$a])"
+done
+exit 0
+EOT
+    printf '#!/bin/bash\n[[ "$1" == "showhold" ]] && for h in ${HELD:-}; do echo "$h"; done\nexit 0\n' > "$MOCK_BIN/apt-mark"
+    chmod +x "$MOCK_BIN/apt-get" "$MOCK_BIN/apt-mark"
+    _PKG_NATIVE_ARCH="amd64"
+}
+
+@test "apt counts what the upgrade installs now: phased, held and kept-back updates come later" {
     _write_mock apt 'cat <<"EOT"
 libxml2/noble-security 2.10 amd64 [upgradable from: 2.9]
 sudo/noble-security 1.1 amd64 [upgradable from: 1.0]
 thermald/noble-updates 2.1 amd64 [upgradable from: 2.0]
+sqlite3/noble-updates 3.2 amd64 [upgradable from: 3.1]
+libsqlite3-0/noble-security 3.2 amd64 [upgradable from: 3.1]
+nordvpn/stable 6.0.1 amd64 [upgradable from: 5.4.0]
+libgbm1/noble-updates 24.1 i386 [upgradable from: 24.0]
 EOT'
+    _mock_apt_sim
+    _source_config
     PATH="$MOCK_BIN:$PATH"
     DETECTED_PKGMGR="apt"
-    NUDGE_APT_CHECK="$TMPDIR_TEST/no-such-apt-check"
-    pkgmgr_count_updates
+    UPDATE_COMMAND="sudo apt update && sudo apt full-upgrade"
+    PHASED="sqlite3 libsqlite3-0" HELD="nordvpn" KEPT="libgbm1:i386" pkgmgr_count_updates
     [[ "$PKG_UPDATES_TOTAL" -eq 3 ]]
     [[ "$PKG_UPDATES_SECURITY" -eq 2 ]]
+    [[ "$PKG_UPDATES_CRITICAL" -eq 1 ]]
+    [[ "$(cut -d'|' -f1 <<< "$PKG_UPDATE_LIST" | tr '\n' ' ')" == "libxml2 sudo thermald " ]]
+    [[ "$PKG_UPDATES_LATER" -eq 4 ]]
+    [[ "$PKG_LATER_LIST" == $'sqlite3|phased\nlibsqlite3-0|phased\nnordvpn|held\nlibgbm1:i386|kept' ]]
+    [[ "$(pkgmgr_later_summary)" == "2 being phased in · 1 on hold · 1 kept back by apt" ]]
+    [[ "$(pkgmgr_later_note)" == "4 more come later (2 being phased in · 1 on hold · 1 kept back by apt)" ]]
+    # all of them phased: the note says so plainly
+    PHASED="sqlite3 libsqlite3-0" pkgmgr_list_updates
+    PKG_LATER_LIST=$'sqlite3|phased\nlibsqlite3-0|phased'; PKG_UPDATES_LATER=2
+    [[ "$(pkgmgr_later_note)" == "2 more come later: the distribution is still phasing them in" ]]
 }
 
-@test "apt counts use apt-check when present" {
+@test "the apt count is the simulation's, not apt-check's" {
+    _write_mock apt 'cat <<"EOT"
+thermald/noble-updates 2.1 amd64 [upgradable from: 2.0]
+EOT'
     _write_mock apt-check 'echo "108;64" >&2'
+    _mock_apt_sim
+    _source_config
+    PATH="$MOCK_BIN:$PATH"
     DETECTED_PKGMGR="apt"
     NUDGE_APT_CHECK="$MOCK_BIN/apt-check"
     pkgmgr_count_updates
-    [[ "$PKG_UPDATES_TOTAL" -eq 108 ]]
-    [[ "$PKG_UPDATES_SECURITY" -eq 64 ]]
+    [[ "$PKG_UPDATES_TOTAL" -eq 1 && "$PKG_UPDATES_SECURITY" -eq 0 ]]
+    # apt upgrade installs new packages but removes none; apt-get upgrade does neither
+    printf '#!/bin/bash\necho "$*" >> "%s/sim-args"\n' "$TMPDIR_TEST" > "$MOCK_BIN/apt-get"
+    UPDATE_COMMAND="sudo apt update && sudo apt upgrade"
+    pkgmgr_list_updates
+    grep -qx -- '-s -q -o Debug::NoLocking=1 --with-new-pkgs upgrade' "$TMPDIR_TEST/sim-args"
+    UPDATE_COMMAND="sudo apt-get update && sudo apt-get -y upgrade"
+    pkgmgr_list_updates
+    grep -qx -- '-s -q -o Debug::NoLocking=1 upgrade' "$TMPDIR_TEST/sim-args"
+    [[ "$(pkgmgr_upgrade_kind)" == "plain" ]]
+    UPDATE_COMMAND="sudo apt-get dist-upgrade -y"
+    [[ "$(pkgmgr_upgrade_kind)" == "full" ]]
+    # anything nudge does not know how to simulate is not guessed at
+    local c
+    for c in "sudo aptitude safe-upgrade" "sudo apt-get --with-new-pkgs upgrade" "sudo apt install --only-upgrade foo" "sudo apt full-upgrade --no-install-recommends"; do
+        UPDATE_COMMAND="$c"
+        [[ "$(pkgmgr_upgrade_kind)" == "unknown" ]]
+    done
+    : > "$TMPDIR_TEST/sim-args"
+    UPDATE_COMMAND="sudo apt install --only-upgrade thermald"
+    pkgmgr_list_updates
+    [[ ! -s "$TMPDIR_TEST/sim-args" && "$(_pkgmgr_list_count)" -eq 1 ]]
+}
+
+@test "the dialog hears what the upgrade does besides the updates: new packages, and removals by name" {
+    _write_mock apt 'cat <<"EOT"
+linux-generic/noble-updates 6.8.0.90 amd64 [upgradable from: 6.8.0.88]
+thermald/noble-updates 2.1 amd64 [upgradable from: 2.0]
+EOT'
+    cat > "$MOCK_BIN/apt-get" <<'EOT'
+#!/bin/bash
+[[ "$1" == "-s" ]] || exit 0
+printf 'Remv old-driver [1.0]\nInst linux-generic [6.8.0.88] (6.8.0.90 Ubuntu:24.04/noble-updates [amd64])\nInst linux-image-6.8.0-90-generic (6.8.0-90.90 Ubuntu:24.04/noble-updates [amd64])\nInst linux-modules-6.8.0-90-generic (6.8.0-90.90 Ubuntu:24.04/noble-updates [amd64])\nInst thermald [2.0] (2.1 Ubuntu:24.04/noble-updates [amd64])\nConf thermald (2.1 Ubuntu:24.04/noble-updates [amd64])\n'
+EOT
+    printf '#!/bin/bash\nexit 0\n' > "$MOCK_BIN/apt-mark"
+    chmod +x "$MOCK_BIN/apt-get" "$MOCK_BIN/apt-mark"
+    _source_config
+    PATH="$MOCK_BIN:$PATH"
+    DETECTED_PKGMGR="apt"
+    _PKG_NATIVE_ARCH="amd64"
+    pkgmgr_count_updates
+    [[ "$PKG_UPDATES_TOTAL" -eq 2 && "$PKG_APT_NEW" -eq 2 && "$PKG_APT_REMOVE" == "old-driver" ]]
+    [[ "$(pkgmgr_plan_note)" == "The upgrade also installs 2 new packages and removes 1: old-driver." ]]
+}
+
+@test "when not one row matches what apt said, nudge does not trust its reading and offers every update" {
+    _write_mock apt 'cat <<"EOT"
+thermald/noble-updates 2.1 amd64 [upgradable from: 2.0]
+vim/noble-updates 9.2 amd64 [upgradable from: 9.1]
+EOT'
+    # names apt prints that none of the rows carry (a native spelling nudge got wrong, a format change)
+    printf '#!/bin/bash\n[[ "$1" == "-s" ]] && printf "Inst thermald:amd64x [2.0] (2.1)\\nInst vim:amd64x [9.1] (9.2)\\n"\nexit 0\n' > "$MOCK_BIN/apt-get"
+    printf '#!/bin/bash\nexit 0\n' > "$MOCK_BIN/apt-mark"
+    chmod +x "$MOCK_BIN/apt-get" "$MOCK_BIN/apt-mark"
+    _source_config
+    PATH="$MOCK_BIN:$PATH"
+    DETECTED_PKGMGR="apt"
+    _PKG_NATIVE_ARCH="amd64"
+    pkgmgr_count_updates
+    [[ "$PKG_UPDATES_TOTAL" -eq 2 && "$PKG_UPDATES_LATER" -eq 0 ]]
+}
+
+@test "a hold on the native package does not label the other architecture as held" {
+    _write_mock apt 'cat <<"EOT"
+libc6/noble-updates 2.40 amd64 [upgradable from: 2.39]
+libc6/noble-updates 2.40 i386 [upgradable from: 2.39]
+vim/noble-updates 9.2 amd64 [upgradable from: 9.1]
+EOT'
+    _mock_apt_sim
+    _source_config
+    PATH="$MOCK_BIN:$PATH"
+    DETECTED_PKGMGR="apt"
+    HELD="libc6" KEPT="libc6:i386" pkgmgr_list_updates
+    [[ "$PKG_LATER_LIST" == $'libc6|held\nlibc6:i386|kept' ]]
+}
+
+@test "the text preview lists every update the count counts, snaps and Flatpaks too" {
+    DETECTED_PKGMGR="apt"
+    _PKG_NATIVE_ARCH="amd64"
+    PKG_UPDATE_LIST="linux-firmware|1|2|STANDARD|all|0"
+    PKG_FLATPAK_LIST="app|app/org.x.Y/x86_64/stable|org.x.Y|Y App|3.1"
+    PKG_SNAP_LIST="firefox|159.0.1-1|9171|299MB|mozilla"
+    run pkgmgr_build_preview 30
+    [[ "$output" == *"linux-firmware (1 → 2)"* ]]
+    [[ "$output" == *"Y App (flatpak → 3.1)"* ]]
+    [[ "$output" == *"firefox (snap → 159.0.1-1)"* ]]
+    PKG_UPDATE_LIST=""
+    run pkgmgr_build_preview 1
+    [[ "$output" == *"Y App (flatpak → 3.1)"*"...and 1 more"* ]]
+}
+
+@test "when apt cannot simulate, every upgradable package is offered as before" {
+    _write_mock apt 'cat <<"EOT"
+thermald/noble-updates 2.1 amd64 [upgradable from: 2.0]
+sqlite3/noble-updates 3.2 amd64 [upgradable from: 3.1]
+EOT'
+    _mock_apt_sim
+    _source_config
+    PATH="$MOCK_BIN:$PATH"
+    DETECTED_PKGMGR="apt"
+    SIM_FAILS=1 pkgmgr_count_updates
+    [[ "$PKG_UPDATES_TOTAL" -eq 2 && "$PKG_UPDATES_LATER" -eq 0 && -z "$PKG_LATER_LIST" ]]
 }
 
 @test "dnf parser keeps dots in names and flags security advisories" {
@@ -481,7 +636,7 @@ esac'
 }
 
 @test "_runner_exec_command runs the grammar as argument vectors, never through a shell" {
-    source "$PROJECT_DIR/lib/config.sh"
+    _source_config
     cat > "$MOCK_BIN/apt-get" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$*" >> "$APT_LOG"
@@ -497,7 +652,7 @@ EOF
 }
 
 @test "_build_upgrade_cmd uses the per-manager default unless the user changed UPDATE_COMMAND" {
-    source "$PROJECT_DIR/lib/config.sh"
+    _source_config
     UPDATE_COMMAND="${CONFIG_DEFAULTS[UPDATE_COMMAND]}"
     DETECTED_PKGMGR="dnf"
     [[ "$(_build_upgrade_cmd)" == "sudo dnf upgrade -y" ]]
@@ -602,6 +757,10 @@ _retry_runner_setup() {
     mkdir -p "$NUDGE_STATE_DIR"
     source "$PROJECT_DIR/lib/retry.sh"
     source "$PROJECT_DIR/lib/waiting.sh"
+    _source_config
+    # config.sh points the state directory at the real one: back to the scratch one
+    export NUDGE_STATE_DIR="$TMPDIR_TEST/state"
+    UPDATE_COMMAND="sudo apt update && sudo apt full-upgrade"
     # apt is stood in for: no simulation to go by, no reverse dependencies
     pkgmgr_apt_upgrade_set() { return 1; }
     _retry_rdepends() { return 0; }
@@ -656,7 +815,7 @@ _ok_flatpak_step() { echo "flatpak" >> "$TMPDIR_TEST/calls"; _runner_status_writ
 
 @test "a rejected update command fails the step in nudge, counts against nothing, and gets no retry question" {
     _retry_runner_setup
-    source "$PROJECT_DIR/lib/config.sh"
+    _source_config
     UPDATE_COMMAND="rm -rf /"
     _runner_apply_flatpak() { _ok_flatpak_step; }
     _runner_apply_snap() { _runner_status_write snap skipped; return 0; }
@@ -672,7 +831,7 @@ _ok_flatpak_step() { echo "flatpak" >> "$TMPDIR_TEST/calls"; _runner_status_writ
 
 @test "every part of the update command keeps the terminal as its standard input" {
     _retry_runner_setup
-    source "$PROJECT_DIR/lib/config.sh"
+    _source_config
     # apt's "[Y/n]" is read from standard input: the second part must see what the runner sees
     cat > "$MOCK_BIN/apt" <<EOT
 #!/bin/bash
@@ -756,7 +915,9 @@ _no_other_lists() {
     [[ "$(cat "$TMPDIR_TEST/calls")" == $'system: nordvpn nordvpn-gui openssl libgbm1:i386 \nsystem: openssl libgbm1:i386 ' ]]
     [[ "$output" == *"nordvpn-gui, nordvpn are waiting: repo.example.org cannot be reached from here right now."* ]]
     [[ "$output" == *"installing the other 2 now."* ]]
-    [[ "$output" == *"all done! everything's fresh."* ]]
+    # not measured here: no number is claimed
+    [[ "$output" == *"done! the package manager says it went through."* ]]
+    [[ "$output" == *"System packages: 2 picked, not verified"* ]]
     [[ "$output" == *"2 standard updates are waiting for a download: nordvpn-gui, nordvpn (nudge --waiting)"* ]]
     # nothing that reads as a failure
     [[ "$output" != *"didn't go through"* ]]
@@ -851,7 +1012,8 @@ _no_other_lists() {
     [[ "$status" -eq 0 ]]
     grep -qx 'asked: Try again without them?' "$TMPDIR_TEST/calls"
     [[ "$output" == *"could not download: nordvpn-gui, nordvpn"* ]]
-    [[ "$output" == *"done! the rest is fresh."* ]]
+    [[ "$output" == *"done! the package manager says it went through."* ]]
+    [[ "$output" == *"left for later, could not be downloaded: nordvpn-gui, nordvpn"* ]]
     run ! grep -q '^waiting_system=' "$_RUNNER_STATUS"
     [[ "$(retry_ledger_rows | cut -f2 | sort | tr '\n' ' ')" == "nordvpn nordvpn-gui " ]]
 }
@@ -872,7 +1034,7 @@ _no_other_lists() {
 
 @test "what the check held back comes in the session file and is never ticked, whatever the scope" {
     _retry_runner_setup
-    source "$PROJECT_DIR/lib/config.sh"
+    _source_config
     DETECTED_PKGMGR="apt"
     _PKG_NATIVE_ARCH="amd64"
     PKG_UPDATE_LIST="vim|1|2|STANDARD|amd64|0"
@@ -1031,7 +1193,7 @@ _step_failing_with() {
 # The real system step with every command stood in for: nothing reaches sudo or apt
 _apt_partial_setup() {
     _retry_runner_setup
-    source "$PROJECT_DIR/lib/config.sh"
+    _source_config
     UPDATE_COMMAND="sudo apt update && sudo apt full-upgrade"
     _runner_run_step() { shift; echo "step: $*" >> "$TMPDIR_TEST/calls"; return 0; }
     _runner_exec_command() { echo "full: $1" >> "$TMPDIR_TEST/calls"; return 0; }
@@ -1128,6 +1290,321 @@ _apt_partial_setup() {
     [[ "$status" -ne 0 ]]
     run _runner_is_apt_refresh dnf update
     [[ "$status" -ne 0 ]]
+}
+
+@test "a snapshot spells every package the way the session's targets are spelled" {
+    _retry_runner_setup
+    _RUNNER_ARCH="amd64"
+    printf '%s\n' '#!/bin/bash' 'printf "ii \tlibc6:amd64\t2.39-0ubuntu8.4\nii \tlibc6:i386\t2.39-0ubuntu8.4\nhi \tnordvpn\t5.4.0\nrc \told-gone\t1.0\nii \tfonts-x:all\t1\nii \tvim\t2:9.1\n"' > "$MOCK_BIN/dpkg-query"
+    printf '%s\n' '#!/bin/bash' 'printf "Name  Version  Rev  Tracking  Publisher  Notes\nfirefox  159.0.1-1  9171  latest/stable  mozilla**  -\nsnapd  2.78  28332  latest/stable  canonical**  snapd\n"' > "$MOCK_BIN/snap"
+    printf '%s\n' '#!/bin/bash' 'printf "app/org.x.Y/x86_64/stable\tabc123\tsystem\nruntime/org.gnome.Platform/x86_64/46\tdef456\tsystem\norg.x.Y/x86_64/stable\tfff999\tuser\n"' > "$MOCK_BIN/flatpak"
+    printf '%s\n' '#!/bin/bash' 'printf "kernel\t0:6.8.9-300.fc40.x86_64\nglibc\t0:2.39-1.fc40.i686\nglibc\t0:2.39-1.fc40.x86_64\n"' > "$MOCK_BIN/rpm"
+    printf '%s\n' '#!/bin/bash' 'printf "linux 6.10.1.arch1-1\nbash 5.2.026-2\n"' > "$MOCK_BIN/pacman"
+    chmod +x "$MOCK_BIN/"*
+    PATH="$MOCK_BIN:$PATH"
+    _RUNNER_PKGMGR=apt
+    [[ "$(_runner_snapshot system)" == $'libc6\t2.39-0ubuntu8.4\nlibc6:i386\t2.39-0ubuntu8.4\nnordvpn\t5.4.0\nfonts-x\t1\nvim\t2:9.1' ]]
+    [[ "$(_runner_snapshot snap)" == $'firefox\t9171\nsnapd\t28332' ]]
+    [[ "$(_runner_snapshot flatpak | LC_ALL=C sort)" == $'org.gnome.Platform/x86_64/46\tsystem=def456\norg.x.Y/x86_64/stable\tsystem=abc123,user=fff999' ]]
+    [[ "$(_runner_ref_key app/org.x.Y/x86_64/stable)" == "org.x.Y/x86_64/stable" ]]
+    _RUNNER_PKGMGR=dnf
+    [[ "$(_runner_snapshot system | LC_ALL=C sort)" == $'glibc\t0:2.39-1.fc40.i686,0:2.39-1.fc40.x86_64\nkernel\t0:6.8.9-300.fc40.x86_64' ]]
+    _RUNNER_PKGMGR=pacman
+    [[ "$(_runner_snapshot system)" == $'linux\t6.10.1.arch1-1\nbash\t5.2.026-2' ]]
+}
+
+# dpkg as the session sees it: a state file the step moves forward
+_dpkg_state_setup() {
+    export DPKG_STATE="$TMPDIR_TEST/dpkg-state"
+    printf '%s\n' "$@" > "$DPKG_STATE"
+    printf '%s\n' '#!/bin/bash' 'while IFS=" " read -r n v; do printf "ii \t%s\t%s\n" "$n" "$v"; done < "$DPKG_STATE"' > "$MOCK_BIN/dpkg-query"
+    chmod +x "$MOCK_BIN/dpkg-query"
+    PATH="$MOCK_BIN:$PATH"
+    _RUNNER_ARCH="amd64"
+}
+
+@test "the session measures what changed, and names what was meant to go in and did not" {
+    _retry_runner_setup
+    _dpkg_state_setup "vim 1" "openssl 1" "sqlite3 1" "old-lib 1"
+    select_reset
+    select_add system standard vim vim
+    select_add system security openssl openssl
+    select_add system standard sqlite3 sqlite3
+    select_apply_scope all
+    # apt upgrades vim and openssl, brings a new kernel module, removes old-lib, and leaves sqlite3
+    _runner_apply_system() {
+        printf '%s\n' "vim 2" "openssl 2" "sqlite3 1" "linux-modules-new 1" > "$DPKG_STATE"
+        _runner_status_write system ok
+        return 0
+    }
+    _no_other_lists
+    pkgmgr_apt_upgrade_set() { printf 'phased sqlite3\n'; }
+    _runner_measure_begin
+    _runner_apply_all
+    _runner_measure_end
+    [[ "${_RUNNER_M_CHANGED[system]}" -eq 2 && "${_RUNNER_M_ADDED[system]}" -eq 1 && "${_RUNNER_M_GONE[system]}" -eq 1 ]]
+    [[ "${_RUNNER_M_MISSED[system]}" == "sqlite3" ]]
+    grep -qx 'measured_system=1' "$_RUNNER_STATUS"
+    grep -qx 'changed_system=2' "$_RUNNER_STATUS"
+    grep -qx 'added_system=1' "$_RUNNER_STATUS"
+    grep -qx 'gone_system=1' "$_RUNNER_STATUS"
+    grep -qx 'missed_system=sqlite3' "$_RUNNER_STATUS"
+    run _runner_summary
+    [[ "$output" == *"done! 3 updates went in, 1 did not."* ]]
+    [[ "$output" == *"System packages: 2, 1 new, 1 removed"* ]]
+    [[ "$output" == *"apt left these as they were: sqlite3 (the distribution is still phasing them in)"* ]]
+    # the launcher reads it, and only what passes the rules
+    _pkgmgr_read_status "$_RUNNER_STATUS"
+    [[ "${_UPG_MEASURED[system]}" == "1" && "${_UPG_CHANGED[system]}" == "2" && "${_UPG_ADDED[system]}" == "1" ]]
+    [[ "${_UPG_GONE[system]}" == "1" && "${_UPG_MISSED[system]}" == "sqlite3" ]]
+    printf 'measured_snap=yes\nchanged_snap=2x\nmissed_snap=ok bad;name\n' > "$TMPDIR_TEST/status2"
+    _pkgmgr_read_status "$TMPDIR_TEST/status2"
+    [[ -z "${_UPG_MEASURED[snap]:-}" && -z "${_UPG_CHANGED[snap]:-}" && "${_UPG_MISSED[snap]}" == "ok" ]]
+}
+
+@test "everything ticked changed: all done, with the measured number" {
+    _retry_runner_setup
+    _dpkg_state_setup "vim 1" "openssl 1"
+    select_reset
+    select_add system standard vim vim
+    select_add system security openssl openssl
+    select_apply_scope all
+    _runner_apply_system() { printf '%s\n' "vim 2" "openssl 2" > "$DPKG_STATE"; _runner_status_write system ok; return 0; }
+    _no_other_lists
+    _runner_measure_begin
+    _runner_apply_all
+    _runner_measure_end
+    run _runner_summary
+    [[ "$output" == *"all done! 2 updates went in."* ]]
+    [[ "$output" == *"System packages: 2"* ]]
+    [[ "$output" != *"left these as they were"* ]]
+    _pkgmgr_read_status "$_RUNNER_STATUS"
+    _UPG_SYSTEM=ok; _UPG_FLATPAK=skipped; _UPG_SNAP=skipped
+    run _pkgmgr_nothing_changed
+    [[ "$status" -ne 0 ]]
+}
+
+@test "nothing changed and nothing failed: nothing to install, and the launcher hears exactly that" {
+    _retry_runner_setup
+    _dpkg_state_setup "vim 1"
+    select_reset
+    select_add system standard vim vim
+    select_apply_scope all
+    _runner_apply_system() { _runner_status_write system ok; return 0; }
+    _no_other_lists
+    _runner_measure_begin
+    _runner_apply_all
+    _runner_measure_end
+    run _runner_summary
+    [[ "$output" == *"nothing went in this time."* ]]
+    [[ "$output" == *"apt left these as they were: vim"* ]]
+    _pkgmgr_read_status "$_RUNNER_STATUS"
+    _pkgmgr_nothing_changed
+    # a list that ran without a measurement cannot be said to have changed nothing
+    _UPG_MEASURED=()
+    run _pkgmgr_nothing_changed
+    [[ "$status" -ne 0 ]]
+    _UPG_SYSTEM=waiting
+    _pkgmgr_nothing_changed
+    _UPG_SYSTEM=failed
+    run _pkgmgr_nothing_changed
+    [[ "$status" -ne 0 ]]
+}
+
+@test "a snapshot that fails afterwards is not read as everything removed or nothing changed" {
+    _retry_runner_setup
+    _dpkg_state_setup "vim 1" "openssl 1"
+    select_reset
+    select_add system standard vim vim
+    select_apply_scope all
+    # dpkg answers before the step and says nothing after it
+    _runner_apply_system() { : > "$DPKG_STATE"; _runner_status_write system ok; return 0; }
+    _no_other_lists
+    _runner_measure_begin
+    _runner_apply_all
+    _runner_measure_end
+    [[ -z "${_RUNNER_MEASURED[system]:-}" ]]
+    run ! grep -q '^measured_system=' "$_RUNNER_STATUS"
+    run _runner_summary
+    [[ "$output" != *"removed"* ]]
+    [[ "$output" == *"done! the package manager says it went through."* ]]
+    [[ "$output" == *"System packages: 1 picked, not verified"* ]]
+    _pkgmgr_read_status "$_RUNNER_STATUS"
+    run _pkgmgr_nothing_changed
+    [[ "$status" -ne 0 ]]
+}
+
+@test "a ticked update the snapshot does not know is never claimed as unchanged" {
+    _retry_runner_setup
+    _dpkg_state_setup "vim 1"
+    select_reset
+    select_add system standard vim vim
+    select_add system standard ghost ghost
+    select_apply_scope all
+    _runner_apply_system() { printf 'vim 2\n' > "$DPKG_STATE"; _runner_status_write system ok; return 0; }
+    _no_other_lists
+    _runner_measure_begin
+    _runner_apply_all
+    _runner_measure_end
+    [[ -z "${_RUNNER_M_MISSED[system]}" ]]
+    [[ "${_RUNNER_M_CHANGED[system]}" -eq 1 ]]
+}
+
+@test "only removals: the summary does not say updates went in" {
+    _retry_runner_setup
+    _dpkg_state_setup "vim 1" "old-lib 1"
+    select_reset
+    select_add system standard vim vim
+    select_apply_scope all
+    _runner_apply_system() { printf 'vim 1\n' > "$DPKG_STATE"; _runner_status_write system ok; return 0; }
+    _no_other_lists
+    _runner_measure_begin
+    _runner_apply_all
+    _runner_measure_end
+    run _runner_summary
+    [[ "$output" == *"done! no updates went in; 1 package removed."* ]]
+    [[ "$output" != *"went in."* || "$output" == *"no updates went in"* ]]
+}
+
+@test "an update already at its version before the session was not left by apt" {
+    _retry_runner_setup
+    _dpkg_state_setup "vim 2" "openssl 1"
+    select_reset
+    select_add system standard vim vim "1 → 2"
+    select_add system security openssl openssl "1 → 2"
+    select_apply_scope all
+    _runner_apply_system() { printf '%s\n' "vim 2" "openssl 2" > "$DPKG_STATE"; _runner_status_write system ok; return 0; }
+    _no_other_lists
+    _runner_measure_begin
+    _runner_apply_all
+    _runner_measure_end
+    [[ -z "${_RUNNER_M_MISSED[system]}" && "${_RUNNER_M_CHANGED[system]}" -eq 1 ]]
+}
+
+@test "a package a failed run left half-configured is still there, not removed" {
+    _retry_runner_setup
+    _RUNNER_ARCH="amd64"
+    printf '%s\n' '#!/bin/bash' 'printf "ii \tvim\t2\niF \topenssl\t2\niU \tlibx\t3\nrc \tgone\t1\n"' > "$MOCK_BIN/dpkg-query"
+    chmod +x "$MOCK_BIN/dpkg-query"
+    PATH="$MOCK_BIN:$PATH"
+    [[ "$(_runner_snapshot system)" == $'vim\t2\nopenssl\t2\nlibx\t3' ]]
+}
+
+@test "a snapshot afterwards with less than half of what was there is not a measurement" {
+    _retry_runner_setup
+    _dpkg_state_setup "a 1" "b 1" "c 1" "d 1" "vim 1"
+    select_reset
+    select_add system standard vim vim
+    select_apply_scope all
+    _runner_apply_system() { printf 'vim 2\n' > "$DPKG_STATE"; _runner_status_write system ok; return 0; }
+    _no_other_lists
+    _runner_measure_begin
+    _runner_apply_all
+    _runner_measure_end
+    [[ -z "${_RUNNER_MEASURED[system]:-}" ]]
+}
+
+@test "a snap whose app still runs is held back at the check, and the session leaves it unticked" {
+    _retry_runner_setup
+    printf 'firefox|standard|159.0.1||\n' | waiting_note snap snap-running
+    PKG_UPDATE_LIST=""
+    PKG_UPDATES_TOTAL=0
+    PKG_SNAP_LIST=$'firefox|159.0.1-1|9171|299MB|mozilla\nsnapd|2.78|28332|34MB|canonical'
+    PKG_UPDATES_SNAP=2
+    _waiting_snap_running() { [[ "$1" == "firefox" ]]; }
+    waiting_hold_back
+    [[ "$PKG_UPDATES_SNAP" -eq 1 && "$PKG_SNAPS_WAITING" -eq 1 ]]
+    [[ "$PKG_SNAP_LIST" == "snapd|2.78|28332|34MB|canonical" ]]
+    [[ "$(waiting_held_snaps)" == "firefox" ]]
+    # snapd itself was never refused: it is never held back, running or not
+    _waiting_snap_running() { return 0; }
+    PKG_SNAP_LIST=$'firefox|159.0.1-1|9171|299MB|mozilla\nsnapd|2.78|28332|34MB|canonical'
+    PKG_UPDATES_SNAP=2
+    waiting_hold_back
+    [[ "$PKG_SNAP_LIST" == "snapd|2.78|28332|34MB|canonical" ]]
+    # the session: the held snap comes along unticked, and the rest is a partial refresh
+    _source_config
+    export NUDGE_STATE_DIR="$TMPDIR_TEST/state"
+    DETECTED_PKGMGR="apt"; _PKG_NATIVE_ARCH="amd64"
+    PKG_FLATPAK_LIST=""
+    local sess
+    sess=$(pkgmgr_write_session all)
+    chmod 600 "$sess"
+    grep -qx 'waiting_snap=firefox' "$sess"
+    _runner_load_session "$sess"
+    select_apply_scope all
+    _runner_hold_waiting
+    [[ "$(select_targets snap)" == "snapd" ]]
+    run select_all_on snap
+    [[ "$status" -ne 0 ]]
+    rm -f "$sess"
+    # the real check: a snap app runs from /snap/<name>/, and a name is checked before it reaches pgrep
+    unset -f _waiting_snap_running
+    source "$PROJECT_DIR/lib/waiting.sh"
+    run _waiting_snap_running 'bad.name*'
+    [[ "$status" -ne 0 ]]
+}
+
+@test "when it stops partway, the session says what did go in" {
+    _retry_runner_setup
+    _dpkg_state_setup "vim 1" "openssl 1"
+    select_reset
+    select_add system standard vim vim
+    select_add system security openssl openssl
+    select_apply_scope all
+    _runner_apply_system() {
+        printf '%s\n' "vim 2" "openssl 1" > "$DPKG_STATE"
+        echo "dpkg: error processing package openssl (--configure): installed openssl package post-installation script subprocess returned error exit status 1" >> "$_RUNNER_STEP_LOG"
+        _RUNNER_LAST_RC=100
+        _runner_status_write system failed
+        return 1
+    }
+    _no_other_lists
+    _runner_ask_retry() { return 1; }
+    _runner_measure_begin
+    _runner_apply_all > "$TMPDIR_TEST/out" 2>&1 || true
+    _runner_measure_end
+    [[ "${_RUNNER_M_CHANGED[system]}" -eq 1 ]]
+    run _runner_partial_line
+    [[ "$output" == *"1 update did go in before it stopped."* ]]
+    grep -q "the install script of openssl failed" "$TMPDIR_TEST/out"
+    # nothing went in: nothing to say
+    _RUNNER_M_CHANGED[system]=0
+    run _runner_partial_line
+    [[ -z "$output" ]]
+}
+
+@test "a snap whose app is running waits until it is closed; the other snaps go in" {
+    _retry_runner_setup
+    select_reset
+    select_add snap snap firefox firefox "→ 159.0.1"
+    select_add snap snap gimp gimp
+    select_apply_scope all
+    _runner_apply_system() { _runner_status_write system skipped; return 0; }
+    _runner_apply_flatpak() { _runner_status_write flatpak skipped; return 0; }
+    _runner_apply_snap() {
+        echo "snap: $(select_targets snap | tr '\n' ' ')" >> "$TMPDIR_TEST/calls"
+        if [[ " $(select_targets snap | tr '\n' ' ') " == *" firefox "* ]]; then
+            echo 'error: cannot refresh "firefox": snap "firefox" has running apps (firefox), pids: 4321' >> "$_RUNNER_STEP_LOG"
+            _RUNNER_LAST_RC=1
+            _runner_status_write snap failed
+            return 1
+        fi
+        _runner_status_write snap ok
+        return 0
+    }
+    _runner_ask_retry() { echo "asked: $1" >> "$TMPDIR_TEST/calls"; return 0; }
+    run _apply_and_summarise
+    [[ "$status" -eq 0 ]]
+    [[ "$(cat "$TMPDIR_TEST/calls")" == $'snap: firefox gimp \nsnap: gimp ' ]]
+    [[ "$output" == *"firefox is waiting until it is closed: a running snap is not refreshed."* ]]
+    [[ "$output" == *"nudge refreshes it the next time it runs with it closed. installing the other one now."* ]]
+    [[ "$output" == *"waiting until it is closed: firefox (nudge --waiting)"* ]]
+    [[ "$output" != *"didn't go through"* ]]
+    [[ -z "$(retry_ledger_rows)" ]]
+    [[ "$(waiting_rows | cut -f1,2,3,4,5)" == $'snap\tfirefox\tstandard\t159.0.1\tsnap-running' ]]
+    grep -qx 'waiting_snap=firefox' "$_RUNNER_STATUS"
+    grep -qx 'waiting_cause_snap=snap-running' "$_RUNNER_STATUS"
 }
 
 @test "sudo refusing the account ends the attempts; a mistyped password gets another go" {

@@ -10,6 +10,10 @@ setup() {
     PROJECT_DIR="$(dirname "$TEST_DIR")"
     SETUP="$PROJECT_DIR/setup.sh"
     TMPDIR_TEST=$(mktemp -d)
+    # no test reaches the real home: whatever a test does not point elsewhere lands here
+    export HOME="$TMPDIR_TEST/default-home"
+    mkdir -p "$HOME"
+    unset XDG_DATA_HOME XDG_CONFIG_HOME XDG_CACHE_HOME XDG_STATE_HOME NUDGE_STATE_DIR
 }
 
 teardown() {
@@ -19,7 +23,7 @@ teardown() {
 @test "setup.sh --version prints version" {
     run "$SETUP" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge setup 2.5.0" ]]
+    [[ "$output" == "nudge setup 2.6.0" ]]
 }
 
 @test "setup.sh --help shows bunny and all flags" {
@@ -248,10 +252,10 @@ teardown() {
     [[ -L "$TMPDIR_TEST/.local/bin/nudge" ]]
     [[ -f "$TMPDIR_TEST/.local/share/icons/hicolor/scalable/apps/nudge.svg" ]]
     run "$TMPDIR_TEST/.local/bin/nudge" --version
-    [[ "$output" == "nudge 2.5.0" ]]
+    [[ "$output" == "nudge 2.6.0" ]]
     run "$TMPDIR_TEST/.local/bin/nudge-setup.sh" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge setup 2.5.0" ]]
+    [[ "$output" == "nudge setup 2.6.0" ]]
 }
 
 @test "uninstall --keep-config keeps the history and state as well" {

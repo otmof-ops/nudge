@@ -5,6 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] — 2026-11-05
+
+What it says is what it does.
+
+### Fixed
+- **The dialog's number and its list disagreed.** With updates being phased
+  in, the headline came from apt-check (which leaves them out) while the
+  names, the chips and the session came from `apt list --upgradable` (which
+  has them): "3 updates are ready" over three names of which two would never
+  install, with the snaps counted but not named. Now one source decides: for
+  apt, nudge asks apt's own simulation of the configured upgrade
+  (`apt-get -s full-upgrade`; `upgrade` for `apt-get upgrade`, `--with-new-pkgs`
+  for `apt upgrade`) and offers exactly what it would install. An update the
+  distribution is still phasing in, one on hold (`apt-mark hold`) or one apt
+  keeps back is not offered; the dialog says how many come later, and says
+  what the upgrade installs or removes besides. apt-check is no longer used.
+  A custom `UPDATE_COMMAND` nudge does not recognise is not simulated: every
+  upgradable package is offered, as before, and the measured summary is the
+  authority. When apt cannot simulate, or not one row matches what it said,
+  nudge offers everything rather than trust a reading it cannot check.
+- **The closing lines counted what was ticked, not what changed.**
+  "System packages: 3" when apt installed one. The session now reads the
+  installed versions before the first step and after the last (dpkg, rpm,
+  pacman, `snap list`, `flatpak list`, both installations) and says what it
+  measured: "all done! 5 updates went in.", "done! 2 updates went in, 1 did
+  not." with the names apt left as they were (and why, when nudge can tell:
+  still being phased in, a running snap), "nothing went in this time." A list
+  nudge could not read is not counted ("the package manager says it went
+  through"); a package a failed run left half-configured is not counted as
+  removed; an update that was already at its version is not called left; a
+  snapshot that comes back with less than half of what was there is not a
+  measurement. After a failure the session says what did go in before it
+  stopped. The history records what changed, what did not, and the outcome
+  `UNCHANGED` (exit 0) when nothing failed and nothing changed; `WAITING`
+  only when something waits for its download, its turn or a running app.
+- **The JSON output never carried the waiting count** that 2.5.0 announced.
+  It now carries `updates.waiting`, `updates.later`, `updates.new_packages`,
+  `updates.removals` and `updated.system|flatpak|snap` (measured, or null).
+- The plain-text preview (notifications, `--dry-run`) listed only system
+  packages while the count included snaps and Flatpaks; it lists all of them.
+- "1 updates" is "1 update".
+- apt's list is read in the C locale, the wording the parser reads.
+- The test suite no longer touches the real home (`--config` and
+  `--validate` wrote `bunny_last_seen`, a setup test `selfupdate_last_check`).
+
+### Added
+- **A snap whose app is running waits instead of failing.** snapd refuses to
+  refresh a running app; the session sets the snap aside quietly and refreshes
+  the others, and while its app still runs at the next check it stays out of
+  the offer ("firefox waits until it is closed"). Only a snap snapd refused is
+  held back that way, never snapd itself or a base.
+
 ## [2.5.0] — 2026-11-05
 
 What cannot be downloaded waits; it does not fail.

@@ -46,6 +46,7 @@ Most Linux update tools are either silent and automatic, locked to one desktop e
 ## Features
 
 - **Consent-first updates** — never updates without your explicit approval; Update Now, Remind Later, or Not Now
+- **What it says is what it does** — the dialog counts what your configured upgrade installs now, from apt's own simulation of it: the number, the names, the chips and the session are one set, and an update the distribution is still phasing in, one on hold or one apt keeps back is not offered (the dialog says it comes later, and what the upgrade installs or removes besides). The closing lines and the history are measured, from the installed versions before and after: how many updates went in, and by name any that were meant to and did not
 - **Dialogs with the bunny in them** — the prompt draws the Nudge Bunny in the mood of the moment, the counts, red and amber chips for critical and security updates, and the first package names; kdialog gets rich text, zenity the same in Pango markup
 - **Pick what to update** — after Update Now, one question: everything, critical and security updates only, one source only, the full list first, or pick one by one; picking one by one opens the menu in a terminal window (every source with its subcategories, select-all at each level, single packages), and only what you tick is applied, with `sudo` asking for your password in that window
 - **What cannot be downloaded waits, it does not fail** — a standard update whose download cannot be fetched (the repository does not answer from this network, its certificate does not verify, the mirror has not caught up) goes on the waiting list without a question, the rest installs, and the session ends fresh; at the next login nudge checks whether that download answers before offering it again, so a repository your network blocks never turns into a prompt at every login. Critical and security updates never wait: they are offered and retried every run. `nudge --waiting` lists what waits, by severity
@@ -85,7 +86,7 @@ installed copy verifies them again on every self-update. To start from a verifie
 one-liner:
 
 ```bash
-git clone --branch v2.5.0 https://github.com/otmof-ops/nudge.git && cd nudge && ./setup.sh --install --defaults
+git clone --branch v2.6.0 https://github.com/otmof-ops/nudge.git && cd nudge && ./setup.sh --install --defaults
 ```
 
 ## How It Works
@@ -400,14 +401,15 @@ With `--json`, nudge emits a single JSON object:
 
 ```json
 {
-  "nudge_version": "2.5.0",
+  "nudge_version": "2.6.0",
   "timestamp": "2026-10-09T09:15:00+08:00",
   "exit_code": 2,
   "exit_reason": "UPDATES_APPLIED",
   "pkg_manager": "apt",
-  "updates": {"total": 14, "security": 3, "critical": 1, "flatpak": 2, "snap": 0},
+  "updates": {"total": 14, "security": 3, "critical": 1, "flatpak": 2, "snap": 0, "waiting": 1, "later": 2, "new_packages": 1, "removals": 0},
   "packages": [{"name": "openssl", "from": "3.0.10", "to": "3.0.11", "priority": "CRITICAL", "arch": "amd64", "security": true}],
   "selected": {"system": 12, "flatpak": 2, "snap": 0},
+  "updated": {"system": 12, "flatpak": null, "snap": null},
   "reboot_required": false,
   "snapshot_id": null,
   "deferred": false,
@@ -507,13 +509,15 @@ That question is for the important ones. A **standard** update that cannot be do
       standard updates wait their turn: they go in once they can be downloaded. installing the other 56 now.
 
     (\__/)
-    (=^.^=)  all done! everything's fresh.
+    (=^.^=)  all done! 56 updates went in.
     (")_(")  System packages: 56
 
     · 2 standard updates are waiting for a download: example-app-gui, example-app (nudge --waiting)
 ```
 
-They go on the **waiting list** (`~/.local/share/nudge/waiting.tsv`), are not counted as failing, and no report or failure dialog is written for them. An update that needs a new dependency from a repository that does not answer waits the same way, and the list says which dependency. When everything you picked only waits, the session says there is nothing to install right now, and the history records `WAITING`, not a failure. Only a download that is not there to be had right now waits (the network, the repository, its certificate, the mirror): a full disk, a lock, sudo or a server that wants credentials keep the question and the report, whatever the update.
+They go on the **waiting list** (`~/.local/share/nudge/waiting.tsv`), are not counted as failing, and no report or failure dialog is written for them. An update that needs a new dependency from a repository that does not answer waits the same way, and the list says which dependency. When everything you picked only waits, the session says there is nothing to install right now, and the history records `WAITING`, not a failure. Only a download that is not there to be had right now waits (the network, the repository, its certificate, the mirror): a full disk, a lock, sudo or a server that wants credentials keep the question and the report, whatever the update. A snap whose app is running waits the same way: snap does not refresh a running app, so the snap is set aside, the rest goes in, and while its app still runs at the next check it stays out of the offer.
+
+The closing lines are measured, never assumed. Before the first step and after the last, the session reads the installed versions (dpkg, rpm or pacman, `snap list`, `flatpak list`): "all done! 56 updates went in." is the count of what changed, "done! 55 updates went in, 1 did not." names the one apt left as it was, and "nothing went in this time." says so when nothing did. A list nudge could not read is not counted: it says the package manager reported success. The history records the same numbers, and `UNCHANGED` when nothing failed and nothing changed.
 
 Before the next prompt nudge asks apt where each waiting download comes from, in one call, and fetches one byte of it, checked against the size apt expects (a captive portal's page is not the file). While it does not answer, the update stays out of the count and out of the dialog (which says how many are waiting), and a login with nothing else pending stays quiet; once it answers, it is offered again, and going in takes it off the list. One failure is enough for a host, and the probes of one login take 20 seconds at most. A week after its last try apt gets the last word again: an update whose probe still says no rides along when something else is being installed anyway (it never makes a prompt by itself), and one nudge cannot probe (no curl or wget, or a proxy, certificate store or credentials only apt has) is offered again.
 
@@ -585,6 +589,9 @@ man ./share/man/nudge.1    # Preview locally
 
 **The systemd timer never shows a dialog:**
 - The user manager needs the session's display: `systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XAUTHORITY` (KDE and GNOME do this for you). Without a display the run is skipped and recorded as `SKIPPED_NO_DISPLAY` in `nudge --history`.
+
+**nudge offers fewer updates than `apt list --upgradable` shows:**
+- It offers what your configured upgrade installs now. An update the distribution is still phasing in, one on hold (`apt-mark hold`) or one apt keeps back is not offered: the dialog says how many come later, and `nudge --check-only` says why. The summary after a session counts what really changed, measured from the installed versions.
 
 **nudge asks about the same updates at every login:**
 - Nothing was installed. Before 2.3.2 the package manager's own "[Y/n]" question read end-of-file instead of your keyboard, so `apt full-upgrade` aborted at once and the session filed it as a decline. Upgrade nudge; the question now waits in the window for your answer, and a no there is recorded as a decline, not a failed update.
