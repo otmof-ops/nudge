@@ -93,6 +93,41 @@ select_set_target() {
     return 0
 }
 
+# Usage: select_target_sub <list> <target>  -> its subcategory (critical, security, standard, ...)
+select_target_sub() {
+    local list="$1" target="$2" i
+    for i in "${!_SEL_LIST[@]}"; do
+        [[ "${_SEL_LIST[$i]}" == "$list" && "${_SEL_TARGET[$i]}" == "$target" ]] || continue
+        printf '%s' "${_SEL_SUB[$i]}"
+        return 0
+    done
+    return 1
+}
+
+# Usage: select_target_version <list> <target>  -> the version it goes to, from its info
+select_target_version() {
+    local list="$1" target="$2" i info
+    for i in "${!_SEL_LIST[@]}"; do
+        [[ "${_SEL_LIST[$i]}" == "$list" && "${_SEL_TARGET[$i]}" == "$target" ]] || continue
+        info="${_SEL_INFO[$i]}"
+        [[ "$info" == *"→ "* ]] || return 0
+        info="${info##*→ }"
+        printf '%s' "${info%% *}"
+        return 0
+    done
+    return 1
+}
+
+# Usage: select_note_target <list> <target> <note>  (appended to what sits beside the label)
+select_note_target() {
+    local list="$1" target="$2" note="$3" i
+    for i in "${!_SEL_LIST[@]}"; do
+        [[ "${_SEL_LIST[$i]}" == "$list" && "${_SEL_TARGET[$i]}" == "$target" ]] || continue
+        _SEL_INFO[$i]="${_SEL_INFO[$i]:+${_SEL_INFO[$i]} · }${note}"
+    done
+    return 0
+}
+
 select_set_all() {
     local value="$1" i
     for i in "${!_SEL_ON[@]}"; do _SEL_ON[$i]="$value"; done

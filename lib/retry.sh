@@ -24,6 +24,7 @@ _RETRY_CULPRITS=""    # the names the output blamed, one per line (validated)
 _RETRY_EVIDENCE=""    # the lines that decided it, one per line (sanitised, cut)
 _RETRY_TEXT=""        # the sanitised log, for the matchers
 _RETRY_UNFETCHED=""   # the downloads apt could not fetch, as name:arch, one per line
+declare -gA _RETRY_UNFETCHED_HOST=()  # name:arch (and name) -> the host it was to come from
 
 # --- What this session recorded, per list (system, flatpak, snap) ---
 declare -gA _RETRY_F_CAUSE=()      # cause id
@@ -209,10 +210,42 @@ retry_diagnose() {
     # apt names every archive it could not download; a full upgrade is all or
     # nothing when one fails, so these are what held the rest back
     _RETRY_UNFETCHED=""
+    _RETRY_UNFETCHED_HOST=()
     if [[ "${2:-}" == "apt" ]]; then
         _RETRY_UNFETCHED=$(_retry_unfetched_apt) || _RETRY_UNFETCHED=""
+        _retry_unfetched_hosts_apt
     fi
     return 0
+}
+
+# Where each download that failed was to come from: _RETRY_UNFETCHED_HOST,
+# keyed by name:arch and by name (in this shell, never a subshell's)
+_retry_unfetched_hosts_apt() {
+    local url host file name arch
+    [[ -n "$_RETRY_TEXT" ]] || return 0
+    while IFS= read -r url; do
+        url="${url#Failed to fetch }"
+        host="${url#*://}"
+        host="${host%%/*}"
+        host="${host##*@}"
+        host="${host%%:*}"
+        [[ "$host" =~ ^[A-Za-z0-9.-]{1,253}$ ]] || continue
+        file="${url##*/}"
+        file="${file%.deb}"
+        [[ "$file" == *_*_* ]] || continue
+        name="${file%%_*}"
+        arch="${file##*_}"
+        retry_valid_name "$name" || continue
+        _RETRY_UNFETCHED_HOST["${name}:${arch}"]="$host"
+        [[ -n "${_RETRY_UNFETCHED_HOST[$name]:-}" ]] || _RETRY_UNFETCHED_HOST["$name"]="$host"
+    done < <(grep -oE 'Failed to fetch [^ ]+\.deb' <<< "$_RETRY_TEXT" | head -n 500 || true)
+    return 0
+}
+
+# The host a selected target's download was to come from, or nothing
+retry_unfetched_host() {
+    local t="${1:-}"
+    printf '%s' "${_RETRY_UNFETCHED_HOST[$t]:-${_RETRY_UNFETCHED_HOST[${t%%:*}]:-}}"
 }
 
 _retry_diagnose_cause() {
@@ -1003,6 +1036,38 @@ retry_record_success() {
           "_RETRY_F_EVIDENCE[$list]" "_RETRY_F_ATTEMPTS[$list]" "_RETRY_F_STREAK[$list]" "_RETRY_F_SINCE[$list]" "_RETRY_F_COUNT[$list]" \
           "_RETRY_F_UNFETCHED[$list]"
     return 0
+}
+
+# Usage: retry_set_aside <list> <targets...>
+# These downloads could not be fetched and are only waiting (lib/waiting.sh):
+# they are not counted as failing, and they no longer explain this list's
+# failure. 0 when nothing else does either (the entry goes: the list did not
+# fail, it is waiting), 1 when the list still failed for the others.
+retry_set_aside() {
+    local list="$1" t u
+    shift
+    [[ $# -gt 0 ]] || return 1
+    printf '%s\n' "$@" | retry_ledger_forgive "$list" \
+        || log_warn "The failure ledger could not be written: $RETRY_LEDGER_FILE"
+    local -A aside=()
+    for t in "$@"; do aside["$t"]=1; done
+    local -a rest=()
+    for u in ${_RETRY_F_UNFETCHED[$list]:-}; do
+        [[ -n "${aside[$u]:-}" ]] || rest+=("$u")
+    done
+    if [[ "${#rest[@]}" -eq 0 ]]; then
+        [[ -n "${_RETRY_F_LOG[$list]:-}" ]] && rm -f "${_RETRY_F_LOG[$list]}" 2>/dev/null
+        unset "_RETRY_F_CAUSE[$list]" "_RETRY_F_RC[$list]" "_RETRY_F_LOG[$list]" "_RETRY_F_CULPRITS[$list]" \
+              "_RETRY_F_EVIDENCE[$list]" "_RETRY_F_ATTEMPTS[$list]" "_RETRY_F_STREAK[$list]" "_RETRY_F_SINCE[$list]" "_RETRY_F_COUNT[$list]" \
+              "_RETRY_F_UNFETCHED[$list]"
+        return 0
+    fi
+    _RETRY_F_UNFETCHED["$list"]="${rest[*]}"
+    local max=0 since=""
+    read -r max since <<< "$(printf '%s\n' "${rest[@]}" | retry_ledger_max "$list")"
+    _RETRY_F_STREAK["$list"]="${max:-0}"
+    _RETRY_F_SINCE["$list"]="${since:-}"
+    return 1
 }
 
 # The lists that failed, in menu order

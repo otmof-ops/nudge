@@ -2,11 +2,11 @@
 # SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/nudge)
 # SPDX-License-Identifier: BSD-3-Clause
 # nudge — A gentle nudge to keep your system fresh.
-# Version: 2.4.0
+# Version: 2.5.0
 
 set -euo pipefail
 
-NUDGE_VERSION="2.4.0"
+NUDGE_VERSION="2.5.0"
 _NUDGE_START_TIME=$(date +%s)
 _NUDGE_TRIGGER="${_NUDGE_TRIGGER:-manual}"
 case "$_NUDGE_TRIGGER" in
@@ -64,6 +64,8 @@ source "$NUDGE_LIB_DIR/selfupdate.sh"
 source "$NUDGE_LIB_DIR/errorreport.sh"
 # shellcheck source=lib/retry.sh
 source "$NUDGE_LIB_DIR/retry.sh"
+# shellcheck source=lib/waiting.sh
+source "$NUDGE_LIB_DIR/waiting.sh"
 # shellcheck source=lib/tui.sh
 source "$NUDGE_LIB_DIR/tui.sh"
 # shellcheck source=lib/select.sh
@@ -141,6 +143,7 @@ _REPORT_CMD=false
 _REPORT_FILE_CMD=false
 _REPORT_CLEAR_CMD=false
 _FAILURES_CMD=false
+_WAITING_CMD=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -175,6 +178,9 @@ Options:
   --failures             Show the updates that keep failing, and the latest failure report
   --failures --json      The same as JSON
   --failures --clear     Forget the failing updates, the reports and the captured error output
+  --waiting              Show the updates waiting for their download, by severity
+  --waiting --json       The same as JSON
+  --waiting --clear      Forget the waiting list (nudge offers those updates again)
 
 Environment:
   XDG_CONFIG_HOME        Config directory (default: ~/.config)
@@ -220,6 +226,7 @@ HELP
         --migrate)     _MIGRATE_CMD=true ;;
         --report)      _REPORT_CMD=true ;;
         --failures)    _FAILURES_CMD=true ;;
+        --waiting)     _WAITING_CMD=true ;;
         --file)        _REPORT_FILE_CMD=true ;;
         --clear)       _REPORT_CLEAR_CMD=true ;;
         -*)
@@ -239,12 +246,16 @@ if [[ "$_REPORT_FILE_CMD" == "true" && "$_REPORT_CMD" != "true" ]]; then
     echo "--file only makes sense with --report" >&2
     exit 10
 fi
-if [[ "$_REPORT_CLEAR_CMD" == "true" && "$_REPORT_CMD" != "true" && "$_FAILURES_CMD" != "true" ]]; then
-    echo "--clear only makes sense with --report or --failures" >&2
+if [[ "$_REPORT_CLEAR_CMD" == "true" && "$_REPORT_CMD" != "true" && "$_FAILURES_CMD" != "true" && "$_WAITING_CMD" != "true" ]]; then
+    echo "--clear only makes sense with --report, --failures or --waiting" >&2
     exit 10
 fi
-if [[ "$_REPORT_CMD" == "true" && "$_FAILURES_CMD" == "true" ]]; then
-    echo "--report and --failures are two different things; ask for one" >&2
+_NUDGE_LISTS_ASKED=0
+for _asked in "$_REPORT_CMD" "$_FAILURES_CMD" "$_WAITING_CMD"; do
+    [[ "$_asked" == "true" ]] && _NUDGE_LISTS_ASKED=$((_NUDGE_LISTS_ASKED + 1))
+done
+if [[ "$_NUDGE_LISTS_ASKED" -gt 1 ]]; then
+    echo "--report, --failures and --waiting are different things; ask for one" >&2
     exit 10
 fi
 
@@ -323,6 +334,17 @@ if [[ "$_FAILURES_CMD" == "true" ]]; then
         retry_failures_show json
     else
         retry_failures_show table
+    fi
+    exit "$EXIT_OK"
+fi
+
+if [[ "$_WAITING_CMD" == "true" ]]; then
+    if [[ "$_REPORT_CLEAR_CMD" == "true" ]]; then
+        waiting_clear
+    elif [[ "$_JSON_MODE" == "true" ]]; then
+        waiting_show json
+    else
+        waiting_show table
     fi
     exit "$EXIT_OK"
 fi
@@ -467,6 +489,18 @@ pkgmgr_count_updates
 flatpak_count
 snap_count
 
+# --- What still waits for its download stays out of the count (lib/waiting.sh) ---
+_NUDGE_LIST_BUILT=false
+if waiting_any; then
+    [[ "${PKG_UPDATES_TOTAL:-0}" -gt 0 ]] && { pkgmgr_list_updates; _NUDGE_LIST_BUILT=true; }
+    waiting_hold_back
+fi
+json_set "updates_waiting" "${PKG_UPDATES_WAITING:-0}"
+_WAITING_DETAIL=""
+if [[ "${PKG_UPDATES_WAITING:-0}" -gt 0 ]]; then
+    _WAITING_DETAIL="waiting: $(waiting_held_targets)"
+fi
+
 # --- Mark last check (a real run only) ---
 if [[ "$DRY_RUN" != "true" ]] && [[ "$CHECK_ONLY" != "true" ]]; then
     schedule_mark_done
@@ -493,6 +527,8 @@ if [[ "$TOTAL_UPDATES" -eq 0 ]]; then
     if [[ "$CHECK_ONLY" == "true" ]]; then
         if [[ "$_JSON_MODE" == "true" ]]; then
             json_emit "$EXIT_OK"
+        elif [[ "${PKG_UPDATES_WAITING:-0}" -gt 0 ]]; then
+            output_banner "nudge: 0 updates available" "everything else is up to date · ${PKG_UPDATES_WAITING} waiting for a download (nudge --waiting)"
         else
             output_banner "nudge: 0 updates available" "everything is up to date"
         fi
@@ -513,12 +549,12 @@ if [[ "$TOTAL_UPDATES" -eq 0 ]]; then
     fi
 
     json_emit "$EXIT_OK"
-    history_write "NO_UPDATES" "" "$EXIT_OK"
+    history_write "NO_UPDATES" "$_WAITING_DETAIL" "$EXIT_OK"
     exit "$EXIT_OK"
 fi
 
 # --- Package details (also computes the critical count) ---
-if [[ -z "$PKG_UPDATE_LIST" ]]; then
+if [[ -z "$PKG_UPDATE_LIST" && "$_NUDGE_LIST_BUILT" != "true" ]]; then
     pkgmgr_list_updates
 fi
 json_set "updates_critical" "$PKG_UPDATES_CRITICAL"
@@ -538,6 +574,7 @@ if [[ "$CHECK_ONLY" == "true" ]]; then
         [[ "$_CHECK_SEC" -gt 0 ]] && _CHECK_DETAIL="${_CHECK_SEC} security"
         [[ "$_CHECK_CRIT" -gt 0 ]] && { [[ -n "$_CHECK_DETAIL" ]] && _CHECK_DETAIL+=" · "; _CHECK_DETAIL+="${_CHECK_CRIT} critical"; }
         [[ -z "$_CHECK_DETAIL" ]] && _CHECK_DETAIL="all standard priority"
+        [[ "${PKG_UPDATES_WAITING:-0}" -gt 0 ]] && _CHECK_DETAIL+=" · ${PKG_UPDATES_WAITING} waiting for a download"
         output_banner "nudge: ${_CHECK_TOTAL} updates available" "$_CHECK_DETAIL"
     fi
     exit "$EXIT_OK"
@@ -575,6 +612,16 @@ MSG+="\n${DIALOG_HINT}"
 if pkgmgr_custom_update_command; then
     DIALOG_NOTE="Update command (from your config): $(_build_upgrade_cmd)"
     MSG+="\n${DIALOG_NOTE}"
+fi
+
+if [[ "${PKG_UPDATES_WAITING:-0}" -gt 0 ]]; then
+    if [[ "$PKG_UPDATES_WAITING" -eq 1 ]]; then
+        _WAITING_NOTE="1 more is waiting for its download and goes in once it can (nudge --waiting)"
+    else
+        _WAITING_NOTE="${PKG_UPDATES_WAITING} more are waiting for their download and go in once they can (nudge --waiting)"
+    fi
+    DIALOG_NOTE+="${DIALOG_NOTE:+  }${_WAITING_NOTE}"
+    MSG+="\n${_WAITING_NOTE}"
 fi
 
 if [[ -n "$SELFUPDATE_AVAILABLE" ]]; then
@@ -675,9 +722,14 @@ case "$NOTIFY_RESPONSE" in
             _UPG_DETAIL+="; attempts: ${_UPG_ATTEMPTS}"
         fi
         for _upg_list in system flatpak snap; do
-            [[ -n "${_UPG_LEFT[$_upg_list]:-}" ]] || continue
-            _UPG_DETAIL+="; left for later (${_upg_list}, ${_UPG_LEFT_CAUSE[$_upg_list]:-unknown}): ${_UPG_LEFT[$_upg_list]}"
+            if [[ -n "${_UPG_LEFT[$_upg_list]:-}" ]]; then
+                _UPG_DETAIL+="; left for later (${_upg_list}, ${_UPG_LEFT_CAUSE[$_upg_list]:-unknown}): ${_UPG_LEFT[$_upg_list]}"
+            fi
+            if [[ -n "${_UPG_WAITING[$_upg_list]:-}" ]]; then
+                _UPG_DETAIL+="; waiting (${_upg_list}, ${_UPG_WAITING_CAUSE[$_upg_list]:-unknown}): ${_UPG_WAITING[$_upg_list]}"
+            fi
         done
+        [[ -n "$_WAITING_DETAIL" ]] && _UPG_DETAIL+="; held back, ${_WAITING_DETAIL}"
         [[ "${_UPG_RETRY_DECLINED:-0}" == "1" ]] && _UPG_DETAIL+="; retry declined"
 
         if [[ "$_UPGRADE_RC" -eq 2 ]]; then
@@ -701,6 +753,15 @@ case "$NOTIFY_RESPONSE" in
         if [[ -n "${_UPG_REPORT:-}" ]]; then
             log_info "Failure report written: $_UPG_REPORT"
             notify_failure_report "$_UPG_REPORT" || true
+        fi
+
+        # Nothing failed, and nothing could go in: all of it waits for its download
+        if [[ "$_UPGRADE_RC" -eq 4 ]]; then
+            log_info "Nothing to install now; the rest waits for its download: $_UPG_DETAIL"
+            _finalize
+            json_emit "$EXIT_OK"
+            history_write "WAITING" "$_UPG_DETAIL" "$EXIT_OK"
+            exit "$EXIT_OK"
         fi
 
         if [[ "$_UPGRADE_RC" -eq 0 ]]; then

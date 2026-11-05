@@ -48,6 +48,7 @@ Most Linux update tools are either silent and automatic, locked to one desktop e
 - **Consent-first updates** — never updates without your explicit approval; Update Now, Remind Later, or Not Now
 - **Dialogs with the bunny in them** — the prompt draws the Nudge Bunny in the mood of the moment, the counts, red and amber chips for critical and security updates, and the first package names; kdialog gets rich text, zenity the same in Pango markup
 - **Pick what to update** — after Update Now, one question: everything, critical and security updates only, one source only, the full list first, or pick one by one; picking one by one opens the menu in a terminal window (every source with its subcategories, select-all at each level, single packages), and only what you tick is applied, with `sudo` asking for your password in that window
+- **What cannot be downloaded waits, it does not fail** — a standard update whose download cannot be fetched (the repository does not answer from this network, its certificate does not verify, the mirror has not caught up) goes on the waiting list without a question, the rest installs, and the session ends fresh; at the next login nudge checks whether that download answers before offering it again, so a repository your network blocks never turns into a prompt at every login. Critical and security updates never wait: they are offered and retried every run. `nudge --waiting` lists what waits, by severity
 - **When an update doesn't go through** — the session reads what the package manager said, names the cause (another package manager holding the lock, an interrupted dpkg, a full disk, a missing repository key, a stale mirror, a package whose install script failed, a snap still running…) and asks whether to try the failed ones again; once the same update has failed twice it writes a failure report with the lines it saw and the commands that might resolve it, in the terminal and in a dialog, and `nudge --failures` shows what keeps failing. nudge never runs those commands for you
 - **Multi-distro support** — auto-detects apt, dnf, pacman, and zypper across Ubuntu, Fedora, Arch, and openSUSE
 - **5 notification backends** — dunstify, kdialog, zenity, gdbus, and notify-send with automatic detection
@@ -84,7 +85,7 @@ installed copy verifies them again on every self-update. To start from a verifie
 one-liner:
 
 ```bash
-git clone --branch v2.4.0 https://github.com/otmof-ops/nudge.git && cd nudge && ./setup.sh --install --defaults
+git clone --branch v2.5.0 https://github.com/otmof-ops/nudge.git && cd nudge && ./setup.sh --install --defaults
 ```
 
 ## How It Works
@@ -321,6 +322,7 @@ Edit `~/.config/nudge/nudge.conf`:
 | `RETRY_ASK` | bool | `true` | After a step fails, ask in the terminal whether to try the failed ones again (with apt, without the downloads that failed) |
 | `RETRY_MAX_ATTEMPTS` | int | `3` | Attempts a session may make at one step, the first included (1 = never retry) |
 | `RETRY_REPORT_AFTER` | int | `2` | Write the failure report once the same update has failed this many times, counted across sessions (1 = on the first failure) |
+| `SET_ASIDE_STANDARD` | bool | `true` | A standard update that cannot be downloaded waits on the waiting list instead of failing: the rest goes in, and it is offered again once its download answers. Critical and security updates never wait |
 
 ### Self-Update Settings
 
@@ -365,6 +367,9 @@ nudge --report --clear       # Clear all crash reports
 nudge --failures             # What keeps failing, and the latest failure report
 nudge --failures --json      # The same as JSON
 nudge --failures --clear     # Forget the failing updates, the reports and the captured output
+nudge --waiting              # What waits for its download, by severity
+nudge --waiting --json       # The same as JSON
+nudge --waiting --clear      # Forget the waiting list (nudge offers those updates again)
 nudge --migrate              # Run config migration
 ```
 
@@ -395,7 +400,7 @@ With `--json`, nudge emits a single JSON object:
 
 ```json
 {
-  "nudge_version": "2.4.0",
+  "nudge_version": "2.5.0",
   "timestamp": "2026-10-09T09:15:00+08:00",
   "exit_code": 2,
   "exit_reason": "UPDATES_APPLIED",
@@ -495,6 +500,31 @@ A full upgrade is all or nothing when a download fails, so one repository that c
 
 Yes unticks those updates and installs the rest as a selection (`apt-get install --only-upgrade`). The session ends with what it left for later, the history records them, and the next run offers them again. Only the updates that could not be downloaded are counted as failing. The other package managers keep the plain question.
 
+That question is for the important ones. A **standard** update that cannot be downloaded is not failing, it is waiting, and nudge does not ask about it:
+
+```text
+    ↷ example-app-gui, example-app are waiting: repo.example.org cannot be reached from here right now.
+      standard updates wait their turn: they go in once they can be downloaded. installing the other 56 now.
+
+    (\__/)
+    (=^.^=)  all done! everything's fresh.
+    (")_(")  System packages: 56
+
+    · 2 standard updates are waiting for a download: example-app-gui, example-app (nudge --waiting)
+```
+
+They go on the **waiting list** (`~/.local/share/nudge/waiting.tsv`), are not counted as failing, and no report or failure dialog is written for them. When everything you picked only waits, the session says there is nothing to install right now, and the history records `WAITING`, not a failure. Before the next prompt nudge asks apt where each waiting download comes from and fetches one byte of it: while it still does not answer, the update stays out of the count and out of the dialog (which says how many are waiting), and a login with nothing else pending stays quiet; once it answers, it is offered again, and going in takes it off the list. When nudge cannot tell (no curl or wget, or apt goes through a proxy of its own), a waiting update rides along again a week after it was last tried.
+
+Critical and security updates are listed on the waiting list too, but they never wait: they are offered every run, retried, counted and reported as above. `nudge --waiting` shows the list by severity, and `SET_ASIDE_STANDARD=false` brings back the question for standard updates as well.
+
+```text
+Security · important: offered and retried every run (nudge --failures)
+  openssl                           3.0.13-0ubuntu3.16  repo.example.org: certificate does not verify from here · since 2026-11-05 09:12
+
+Standard · waiting quietly: offered again once the download answers
+  example-app                       6.0.1               repo.example.org: certificate does not verify from here · since 2026-10-27 20:21
+```
+
 <p align="center"><img src="docs/assets/screenshot-failure.png" alt="Some updates didn't go through: the teary bunny, the system packages failed 3 times because another package manager is running, the firefox snap is still running, Show Report / Close" width="640"></p>
 
 Every failed attempt is counted per update, across sessions, and forgotten the moment the update goes through. Once the same update has failed `RETRY_REPORT_AFTER` times (default 2: a retry that fails again is already the second time) the session writes a **failure report**: what failed, how many times and since when, the cause and what it means, the lines the package manager printed, the commands that might resolve it, and where the captured output is. It is printed in the terminal, saved under `~/.local/share/nudge/reports/`, and offered in a dialog (**Show Report** / **Close**) once the window closes. `nudge --failures` shows the ledger and the latest report at any time; `nudge --failures --clear` forgets it all.
@@ -558,6 +588,9 @@ man ./share/man/nudge.1    # Preview locally
 **The system monitor shows nudge using gigabytes, or the autostart service never stops:**
 - Before 2.3.1, the update window and every tab you opened in it were counted against "Nudge Update Checker", and nudge waited for the window to close. Since 2.3.1 the window lives in its own scope and nudge finishes when the session does; the tabs you keep open show under the terminal's name. A run started before the upgrade still waits for its window: close that window once, or log in again.
 
+**The same update is waiting at every login:**
+- `nudge --waiting` says where its download comes from and why it cannot be fetched (most often a network that blocks that repository). It goes in by itself the first time nudge runs where the download answers. If the repository is gone for good, remove its file from `/etc/apt/sources.list.d/`; `nudge --waiting --clear` makes nudge offer the update again at once.
+
 **An update keeps failing:**
 - `nudge --failures` shows what keeps failing, since when, the cause nudge recognised, and the latest failure report with the commands that might resolve it. The package manager's own output from the failed step is under `~/.local/share/nudge/logs/`.
 - Once the update goes through, nudge forgets it; `nudge --failures --clear` forgets everything at once.
@@ -584,7 +617,7 @@ Contributions are welcome. See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for the c
 | Test suite | 566 tests across 20 files |
 | Library modules | 18 modular `.sh` files |
 | Named exit codes | 13 scriptable exit codes |
-| Config keys | 35 validated keys |
+| Config keys | 36 validated keys |
 | Notification backends | 5 with auto-detection |
 | Package managers | 4 + Flatpak + Snap |
 | Mascot | an SVG character with 7 moods, 11 text poses for terminals |

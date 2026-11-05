@@ -601,6 +601,7 @@ _retry_runner_setup() {
     export NUDGE_STATE_DIR="$TMPDIR_TEST/state"
     mkdir -p "$NUDGE_STATE_DIR"
     source "$PROJECT_DIR/lib/retry.sh"
+    source "$PROJECT_DIR/lib/waiting.sh"
     _RUNNER_PKGMGR="apt"; DETECTED_PKGMGR="apt"; _RUNNER_SCOPE="all"
     _RUNNER_STATUS="$TMPDIR_TEST/status"
     : > "$_RUNNER_STATUS"
@@ -711,8 +712,129 @@ _apply_and_summarise() { _runner_apply_all && _runner_summary; }
     [[ "$output" == *"Press Enter to close this window."* ]]
 }
 
-@test "when some downloads fail, the next try leaves them out and installs the rest" {
+# A system step whose downloads of the names in BLOCKED fail while any of them is ticked
+_blocked_step() {
+    echo "system: $(select_targets system | tr '\n' ' ')" >> "$TMPDIR_TEST/calls"
+    local t hit=false esc=$'\033'
+    for t in $(select_targets system); do
+        [[ " ${BLOCKED} " == *" $t "* ]] || continue
+        hit=true
+        echo "${esc}[1;31mE: ${esc}[0mFailed to fetch https://repo.example.org/pool/main/x/${t%%:*}/${t%%:*}_6.0.1_amd64.deb  Certificate verification failed: The certificate is NOT trusted." >> "$_RUNNER_STEP_LOG"
+    done
+    if [[ "$hit" == "true" ]]; then
+        echo "E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?" >> "$_RUNNER_STEP_LOG"
+        _RUNNER_LAST_RC=100
+        _runner_status_write system failed
+        return 1
+    fi
+    _runner_status_write system ok
+    return 0
+}
+
+_no_other_lists() {
+    _runner_apply_flatpak() { _runner_status_write flatpak skipped; return 0; }
+    _runner_apply_snap() { _runner_status_write snap skipped; return 0; }
+}
+
+@test "standard updates that cannot be downloaded wait, without a question, and the rest goes in" {
     _retry_runner_setup
+    select_reset
+    select_add system standard nordvpn nordvpn "5.4.0 → 6.0.1"
+    select_add system standard nordvpn-gui nordvpn-gui "5.4.0 → 6.0.1"
+    select_add system security openssl openssl
+    select_add system standard libgbm1:i386 libgbm1:i386
+    select_apply_scope all
+    _runner_apply_system() { _blocked_pair_step; }
+    _no_other_lists
+    _runner_ask_retry() { echo "asked: $1" >> "$TMPDIR_TEST/calls"; return 0; }
+    run _apply_and_summarise
+    [[ "$status" -eq 0 ]]
+    # no question: the second run is the rest, straight away
+    [[ "$(cat "$TMPDIR_TEST/calls")" == $'system: nordvpn nordvpn-gui openssl libgbm1:i386 \nsystem: openssl libgbm1:i386 ' ]]
+    [[ "$output" == *"nordvpn-gui, nordvpn are waiting: repo.example.org cannot be reached from here right now."* ]]
+    [[ "$output" == *"installing the other 2 now."* ]]
+    [[ "$output" == *"all done! everything's fresh."* ]]
+    [[ "$output" == *"2 standard updates are waiting for a download: nordvpn-gui, nordvpn (nudge --waiting)"* ]]
+    # nothing that reads as a failure
+    [[ "$output" != *"didn't go through"* ]]
+    [[ "$output" != *"could not download"* ]]
+    [[ "$output" != *"Failure report"* ]]
+    grep -qx 'waiting_system=nordvpn-gui nordvpn' "$_RUNNER_STATUS"
+    grep -qx 'waiting_cause_system=repo-tls' "$_RUNNER_STATUS"
+    [[ "$(grep '^system=' "$_RUNNER_STATUS" | tail -1)" == "system=ok" ]]
+    [[ "$(grep '^selected_system=' "$_RUNNER_STATUS" | tail -1)" == "selected_system=2" ]]
+    run ! grep -q '^cause_system=' "$_RUNNER_STATUS"
+    # not failing: the ledger is empty; waiting: both on the list, as standard, with where and what
+    [[ -z "$(retry_ledger_rows)" ]]
+    [[ "$(waiting_rows | cut -f2,3,4,6 | LC_ALL=C sort)" == $'nordvpn\tstandard\t6.0.1\trepo.example.org\nnordvpn-gui\tstandard\t6.0.1\trepo.example.org' ]]
+    # the launcher reads them, and only names that pass the rule
+    _pkgmgr_read_status "$_RUNNER_STATUS"
+    [[ "${_UPG_WAITING[system]}" == "nordvpn-gui nordvpn" ]]
+    [[ "${_UPG_WAITING_CAUSE[system]}" == "repo-tls" ]]
+    [[ "$_UPG_SYSTEM" == "ok" ]]
+    printf 'waiting_snap=good-name evil;rm\nwaiting_cause_snap=Bad Cause\n' > "$TMPDIR_TEST/status2"
+    _pkgmgr_read_status "$TMPDIR_TEST/status2"
+    [[ "${_UPG_WAITING[snap]}" == "good-name" ]]
+    [[ -z "${_UPG_WAITING_CAUSE[snap]:-}" ]]
+}
+
+@test "when everything selected only waits, nothing failed: nothing to install right now" {
+    _retry_runner_setup
+    select_reset
+    select_add system standard nordvpn nordvpn
+    select_add system standard nordvpn-gui nordvpn-gui
+    select_apply_scope all
+    _runner_apply_system() { _blocked_pair_step; }
+    _no_other_lists
+    _runner_ask_retry() { echo "asked: $1" >> "$TMPDIR_TEST/calls"; return 0; }
+    run _apply_and_summarise
+    [[ "$status" -eq 0 ]]
+    [[ "$(grep -c '^system:' "$TMPDIR_TEST/calls")" -eq 1 ]]
+    [[ "$(grep -c '^asked' "$TMPDIR_TEST/calls" || true)" -eq 0 ]]
+    [[ "$output" == *"nothing else to install."* ]]
+    [[ "$output" == *"nothing to install right now."* ]]
+    [[ "$output" == *"nordvpn-gui, nordvpn will go in once they can be downloaded."* ]]
+    [[ "$output" != *"didn't go through"* ]]
+    [[ "$(grep '^system=' "$_RUNNER_STATUS" | tail -1)" == "system=waiting" ]]
+    [[ -z "$(retry_ledger_rows)" ]]
+    [[ -z "$(ls "$NUDGE_STATE_DIR/reports" 2>/dev/null)" ]]
+    # the launcher: nothing failed and nothing went in
+    _pkgmgr_read_status "$_RUNNER_STATUS"
+    [[ "$_UPG_SYSTEM" == "waiting" && "$_UPG_FLATPAK" == "skipped" ]]
+    [[ "$(_runner_names_line "a b c d e f g h i j")" == "a, b, c, d, e, f, g, h, and 2 more" ]]
+}
+
+@test "a security update that cannot be downloaded is not set aside: it is named, asked about and counted" {
+    _retry_runner_setup
+    select_reset
+    select_add system security openssl openssl
+    select_add system standard nordvpn nordvpn
+    select_add system standard vim vim
+    select_apply_scope all
+    BLOCKED="openssl nordvpn"
+    _runner_apply_system() { _blocked_step; }
+    _no_other_lists
+    _runner_ask_retry() { echo "asked: $1" >> "$TMPDIR_TEST/calls"; return 0; }
+    run _apply_and_summarise
+    [[ "$status" -eq 0 ]]
+    # the standard one waits at once; the security one is the question
+    [[ "$output" == *"nordvpn is waiting: repo.example.org cannot be reached from here right now."* ]]
+    [[ "$output" == *"could not download: openssl"* ]]
+    [[ "$output" == *"1 other update can go in without it; it stays for later."* ]]
+    grep -qx 'asked: Try again without it?' "$TMPDIR_TEST/calls"
+    [[ "$(tail -1 "$TMPDIR_TEST/calls")" == "system: vim " ]]
+    [[ "$output" == *"left for later, could not be downloaded: openssl · nudge tries again next time"* ]]
+    [[ "$output" == *"1 standard update is waiting for a download: nordvpn (nudge --waiting)"* ]]
+    # the important one is counted as failing; both are on the waiting list, by severity
+    [[ "$(retry_ledger_rows | cut -f2)" == "openssl" ]]
+    [[ "$(waiting_rows | cut -f2,3)" == $'openssl\tsecurity\nnordvpn\tstandard' ]]
+    grep -qx 'left_system=openssl' "$_RUNNER_STATUS"
+    grep -qx 'waiting_system=nordvpn' "$_RUNNER_STATUS"
+}
+
+@test "SET_ASIDE_STANDARD=false keeps the question for standard updates too" {
+    _retry_runner_setup
+    SET_ASIDE_STANDARD=false
     select_reset
     select_add system standard nordvpn nordvpn
     select_add system standard nordvpn-gui nordvpn-gui
@@ -720,50 +842,57 @@ _apply_and_summarise() { _runner_apply_all && _runner_summary; }
     select_add system standard libgbm1:i386 libgbm1:i386
     select_apply_scope all
     _runner_apply_system() { _blocked_pair_step; }
-    _runner_apply_flatpak() { _runner_status_write flatpak skipped; return 0; }
-    _runner_apply_snap() { _runner_status_write snap skipped; return 0; }
+    _no_other_lists
     _runner_ask_retry() { echo "asked: $1" >> "$TMPDIR_TEST/calls"; return 0; }
     run _apply_and_summarise
     [[ "$status" -eq 0 ]]
-    [[ "$(cat "$TMPDIR_TEST/calls")" == $'system: nordvpn nordvpn-gui openssl libgbm1:i386 \nasked: Try again without them?\nsystem: openssl libgbm1:i386 ' ]]
+    grep -qx 'asked: Try again without them?' "$TMPDIR_TEST/calls"
     [[ "$output" == *"could not download: nordvpn-gui, nordvpn"* ]]
-    [[ "$output" == *"2 other updates can go in without them; those 2 stay for later."* ]]
     [[ "$output" == *"done! the rest is fresh."* ]]
-    [[ "$output" == *"left for later, could not be downloaded: nordvpn-gui, nordvpn"* ]]
-    grep -qx 'left_system=nordvpn-gui nordvpn' "$_RUNNER_STATUS"
-    grep -qx 'left_cause_system=repo-tls' "$_RUNNER_STATUS"
-    [[ "$(grep '^selected_system=' "$_RUNNER_STATUS" | tail -1)" == "selected_system=2" ]]
-    grep -qx 'attempts=2' "$_RUNNER_STATUS"
-    # only the two that could not be downloaded are counted as failing
+    run ! grep -q '^waiting_system=' "$_RUNNER_STATUS"
     [[ "$(retry_ledger_rows | cut -f2 | sort | tr '\n' ' ')" == "nordvpn nordvpn-gui " ]]
-    # the launcher reads what was left out, and only names that pass the rule
-    _pkgmgr_read_status "$_RUNNER_STATUS"
-    [[ "${_UPG_LEFT[system]}" == "nordvpn-gui nordvpn" ]]
-    [[ "${_UPG_LEFT_CAUSE[system]}" == "repo-tls" ]]
-    [[ "$_UPG_SYSTEM" == "ok" ]]
-    printf 'left_snap=good-name evil;rm\nleft_cause_snap=Bad Cause\n' > "$TMPDIR_TEST/status2"
-    _pkgmgr_read_status "$TMPDIR_TEST/status2"
-    [[ "${_UPG_LEFT[snap]}" == "good-name" ]]
-    [[ -z "${_UPG_LEFT_CAUSE[snap]:-}" ]]
 }
 
-@test "when every selected download failed there is nothing to leave out: the plain question stands" {
+@test "when the rest goes in, the waiting list forgets what went in" {
     _retry_runner_setup
+    printf 'nordvpn|standard|6.0.1|repo.example.org\n' | waiting_note system repo-tls
     select_reset
     select_add system standard nordvpn nordvpn
-    select_add system standard nordvpn-gui nordvpn-gui
     select_apply_scope all
-    _runner_apply_system() { _blocked_pair_step; }
-    _runner_apply_flatpak() { _runner_status_write flatpak skipped; return 0; }
-    _runner_apply_snap() { _runner_status_write snap skipped; return 0; }
-    _runner_ask_retry() { echo "asked: $1" >> "$TMPDIR_TEST/calls"; return 1; }
-    run _runner_apply_all
-    [[ "$status" -eq 1 ]]
-    [[ "$output" == *"could not download: nordvpn-gui, nordvpn"* ]]
-    [[ "$output" != *"can go in without"* ]]
-    grep -qx 'asked: Try the failed ones again?' "$TMPDIR_TEST/calls"
-    run ! grep -q '^left_' "$_RUNNER_STATUS"
-    [[ "$(_runner_names_line "a b c d e f g h i j")" == "a, b, c, d, e, f, g, h, and 2 more" ]]
+    _runner_apply_system() { _runner_status_write system ok; return 0; }
+    _no_other_lists
+    run _apply_and_summarise
+    [[ "$status" -eq 0 ]]
+    [[ -z "$(waiting_rows)" ]]
+    [[ ! -e "$WAITING_FILE" ]]
+}
+
+@test "what the check held back comes in the session file and is never ticked, whatever the scope" {
+    _retry_runner_setup
+    source "$PROJECT_DIR/lib/config.sh"
+    DETECTED_PKGMGR="apt"
+    _PKG_NATIVE_ARCH="amd64"
+    PKG_UPDATE_LIST="vim|1|2|STANDARD|amd64|0"
+    PKG_WAITING_LIST="nordvpn|5.4.0|6.0.1|STANDARD|amd64|0"
+    PKG_FLATPAK_LIST=""; PKG_SNAP_LIST=""
+    local sess
+    sess=$(pkgmgr_write_session all)
+    chmod 600 "$sess"
+    grep -qx 'waiting=nordvpn' "$sess"
+    grep -qx 'nordvpn|5.4.0|6.0.1|STANDARD|amd64|0' "$sess"
+    _runner_load_session "$sess"
+    [[ "$_RUNNER_HELD" == "nordvpn" ]]
+    select_apply_scope all
+    _runner_hold_waiting
+    [[ "$(select_targets system)" == "vim" ]]
+    run select_all_on system
+    [[ "$status" -ne 0 ]]
+    # a name that is not a package name never reaches the selection
+    printf 'pkgmgr=apt\nwaiting=ok-name bad;name\n[system]\n' > "$TMPDIR_TEST/sess2"
+    chmod 600 "$TMPDIR_TEST/sess2"
+    _runner_load_session "$TMPDIR_TEST/sess2"
+    [[ "$_RUNNER_HELD" == "ok-name" ]]
+    rm -f "$sess"
 }
 
 @test "sudo refusing the account ends the attempts; a mistyped password gets another go" {

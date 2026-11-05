@@ -1,4 +1,4 @@
-.TH NUDGE 1 "October 2026" "nudge 2.4.0" "User Commands"
+.TH NUDGE 1 "November 2026" "nudge 2.5.0" "User Commands"
 .SH NAME
 nudge \- a gentle nudge to keep your system fresh
 .SH SYNOPSIS
@@ -30,6 +30,16 @@ the lines the package manager printed and the commands that might resolve it.
 nudge never runs those commands itself. The messages it recognises are the
 English ones; in another language the cause reads as unknown and the lines
 are quoted as they are.
+.PP
+A standard update whose download cannot be fetched (the repository does not
+answer from this network, its certificate does not verify, the mirror has not
+caught up) is not failing, it is waiting: the session sets it aside without a
+question, installs the rest, and keeps it on the waiting list. Before the next
+prompt nudge asks apt where each waiting download comes from and fetches one
+byte of it; while it does not answer, the update stays out of the count and
+the dialog, and once it answers it is offered again. Critical and security
+updates are never set aside: they are offered, retried, counted and reported
+every run.
 .PP
 nudge supports multiple package managers (apt, dnf, pacman, zypper),
 Flatpak and Snap integration, multiple notification backends
@@ -104,9 +114,19 @@ The same as one JSON object.
 .TP
 .B \-\-failures \-\-clear
 Forget the failing updates, the reports and the captured error output.
+.TP
+.B \-\-waiting
+Show the updates that wait for their download, by severity: the version, where
+it comes from, why it cannot be fetched, and since when.
+.TP
+.B \-\-waiting \-\-json
+The same as one JSON object.
+.TP
+.B \-\-waiting \-\-clear
+Forget the waiting list; nudge offers those updates again.
 .SH CONFIGURATION
 Configuration is stored in \fI~/.config/nudge/nudge.conf\fR.
-All 35 keys are listed below with their types and defaults.
+All 36 keys are listed below with their types and defaults.
 .SS Core Settings
 .TP
 .B ENABLED
@@ -215,6 +235,12 @@ question is whether to try again without them, installing the rest.
 .B RETRY_REPORT_AFTER
 (int, default: 2) Write the failure report once the same update has failed
 this many times, counted across sessions (1 = on the first failure).
+.TP
+.B SET_ASIDE_STANDARD
+(bool, default: true) A standard update that cannot be downloaded waits on the
+waiting list instead of failing: the rest goes in, and it is offered again once
+its download answers. Critical and security updates never wait. With false,
+standard updates get the same question as the important ones.
 .SS Self-Update Settings
 .TP
 .B SELF_UPDATE_CHECK
@@ -313,6 +339,10 @@ JSONL history log.
 .I ~/.local/share/nudge/failures.tsv
 The updates that keep failing: list, name, attempts, first and last failure, cause.
 .TP
+.I ~/.local/share/nudge/waiting.tsv
+The updates that wait for their download: list, name, severity, version,
+cause, host, first and last try, tries.
+.TP
 .I ~/.local/share/nudge/reports/
 Failure reports (the newest 20).
 .TP
@@ -408,6 +438,11 @@ nudge --migrate
 See what keeps failing, and the latest failure report:
 .RS
 nudge --failures
+.RE
+.PP
+See what waits for its download:
+.RS
+nudge --waiting
 .RE
 .SH SEE ALSO
 .BR apt (8),

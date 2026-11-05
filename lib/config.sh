@@ -61,6 +61,8 @@ declare -gA CONFIG_DEFAULTS=(
     [RETRY_ASK]="true"
     [RETRY_MAX_ATTEMPTS]="3"
     [RETRY_REPORT_AFTER]="2"
+    # v2.5 keys
+    [SET_ASIDE_STANDARD]="true"
 )
 
 # --- Type declarations ---
@@ -102,6 +104,7 @@ declare -gA CONFIG_TYPES=(
     [RETRY_ASK]="bool"
     [RETRY_MAX_ATTEMPTS]="int"
     [RETRY_REPORT_AFTER]="int"
+    [SET_ASIDE_STANDARD]="bool"
 )
 
 # --- Validate a single key/value pair ---
@@ -546,6 +549,9 @@ HEADER
     printf 'RETRY_MAX_ATTEMPTS=%s\n' "${RETRY_MAX_ATTEMPTS:-3}"
     printf '\n# Write the failure report once the same update has failed this many times, counted across sessions (1 = on the first failure)\n'
     printf 'RETRY_REPORT_AFTER=%s\n' "${RETRY_REPORT_AFTER:-2}"
+    printf '\n# A standard update that cannot be downloaded waits on the waiting list (nudge --waiting) instead of failing:\n'
+    printf '# the rest goes in, and it is offered again once its download answers. Critical and security updates never wait (true/false)\n'
+    printf 'SET_ASIDE_STANDARD=%s\n' "${SET_ASIDE_STANDARD:-true}"
 
     printf '\n# --- Self-Update Settings ---\n'
     printf '\n# Check GitHub for newer nudge version (true/false)\n'

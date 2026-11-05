@@ -16,17 +16,17 @@ teardown() {
     [[ -n "${_INTEGRATION_TMPDIR:-}" ]] && rm -rf "$_INTEGRATION_TMPDIR" || true
 }
 
-@test "nudge --version prints 2.4.0" {
+@test "nudge --version prints 2.5.0" {
     run "$NUDGE" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge 2.4.0" ]]
+    [[ "$output" == "nudge 2.5.0" ]]
 }
 
 @test "nudge --help prints usage with bunny mascot" {
     run "$NUDGE" --help
     [[ "$status" -eq 0 ]]
     [[ "$output" == *'(\__/)'* ]]
-    [[ "$output" == *"nudge 2.4.0"* ]]
+    [[ "$output" == *"nudge 2.5.0"* ]]
     [[ "$output" == *"Usage:"* ]]
     [[ "$output" == *"--dry-run"* ]]
     [[ "$output" == *"--json"* ]]
@@ -76,7 +76,7 @@ teardown() {
 @test "install.sh --version prints version via setup.sh" {
     run "$PROJECT_DIR/install.sh" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge setup 2.4.0" ]]
+    [[ "$output" == "nudge setup 2.5.0" ]]
 }
 
 @test "install.sh --help shows setup.sh flags" {
@@ -263,7 +263,7 @@ _integration_terminal() {
     cp "$PROJECT_DIR"/lib/*.sh "$prefix/.local/lib/nudge/"
     run env -u NUDGE_LIB_DIR HOME="$_INTEGRATION_TMPDIR/elsewhere" "$prefix/.local/bin/nudge.sh" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "nudge 2.4.0" ]]
+    [[ "$output" == "nudge 2.5.0" ]]
 }
 
 @test "flags that need a value or a parent flag are usage errors, not silent runs" {
@@ -416,35 +416,134 @@ EOT
     [[ "$status" -eq 1 ]]
 }
 
-@test "a download that cannot be fetched is named, offered to be left out, and alone counted as failing" {
-    _integration_mocks
-    _integration_terminal
-    _integration_kdialog all
-    # no sudo in the command: the mock apt answers all of it, and the answer to
-    # the question is no, so nothing reaches the selection's own commands (sudo)
-    printf 'UPDATE_COMMAND="apt update && apt full-upgrade"\n' >> "$XDG_CONFIG_HOME/nudge/nudge.conf"
+# apt whose download of the names in BLOCKED fails, and apt-get that knows
+# where each download comes from; curl answers nudge's probe with PROBE_CODE
+_integration_blocked_apt() {
     cat > "$_INTEGRATION_TMPDIR/bin/apt" <<'EOT'
 #!/bin/bash
 case "${1:-}" in
     list)
         printf 'Listing...\n'
-        printf 'openssl/noble-security 3.0.13-0ubuntu3.16 amd64 [upgradable from: 3.0.13-0ubuntu3.15]\n'
-        printf 'vim/noble-updates 2:9.1.0016-1ubuntu7.9 amd64 [upgradable from: 2:9.1.0016-1ubuntu7.8]\n' ;;
+        for n in ${PENDING}; do
+            case "$n" in
+                openssl) printf 'openssl/noble-security 3.0.13-0ubuntu3.16 amd64 [upgradable from: 3.0.13-0ubuntu3.15]\n' ;;
+                vim)     printf 'vim/noble-updates 2:9.1.0016-1ubuntu7.9 amd64 [upgradable from: 2:9.1.0016-1ubuntu7.8]\n' ;;
+            esac
+        done ;;
     full-upgrade)
-        echo "E: Failed to fetch https://repo.example.org/pool/main/v/vim/vim_2%3a9.1.0016-1ubuntu7.9_amd64.deb  Certificate verification failed: The certificate is NOT trusted." >&2
+        echo "full-upgrade" >> "$APT_LOG"
+        for n in ${BLOCKED}; do
+            echo "E: Failed to fetch https://repo.example.org/pool/main/x/${n}/${n}_1.0_amd64.deb  Certificate verification failed: The certificate is NOT trusted." >&2
+        done
+        [[ -n "${BLOCKED}" ]] || exit 0
         echo "E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?" >&2
         exit 100 ;;
 esac
 exit 0
 EOT
+    cat > "$_INTEGRATION_TMPDIR/bin/apt-get" <<'EOT'
+#!/bin/bash
+if [[ "$1" == "download" && "$2" == "--print-uris" ]]; then
+    n="${4:-$3}"
+    printf "'https://repo.example.org/pool/main/x/%s/%s_1.0_amd64.deb' %s_1.0_amd64.deb 1000 SHA256:00\n" "$n" "$n" "$n"
+    exit 0
+fi
+echo "apt-get $*" >> "$APT_LOG"
+exit 0
+EOT
+    cat > "$_INTEGRATION_TMPDIR/bin/curl" <<'EOT'
+#!/bin/bash
+for a in "$@"; do
+    if [[ "$a" == "-r" ]]; then
+        echo "probe ${*: -1}" >> "$APT_LOG"
+        printf '%s' "${PROBE_CODE:-000}"
+        exit 0
+    fi
+done
+exit 0
+EOT
+    chmod +x "$_INTEGRATION_TMPDIR/bin/apt" "$_INTEGRATION_TMPDIR/bin/apt-get" "$_INTEGRATION_TMPDIR/bin/curl"
+    # no sudo in the command: the mock apt answers all of it
+    printf 'UPDATE_COMMAND="apt update && apt full-upgrade"\n' >> "$XDG_CONFIG_HOME/nudge/nudge.conf"
+    export APT_LOG="$_INTEGRATION_TMPDIR/apt.log"
+    : > "$APT_LOG"
+}
+
+@test "a standard update that cannot be downloaded waits: no failure, and no prompt until its download answers" {
+    _integration_mocks
+    _integration_terminal
+    _integration_kdialog all
+    _integration_blocked_apt
+    export PENDING="vim" BLOCKED="vim"
+    run env DISPLAY=:0 KDE_SESSION_VERSION=5 _NUDGE_TRIGGER=login "$NUDGE"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"vim is waiting: repo.example.org cannot be reached from here right now."* ]]
+    [[ "$output" == *"nothing to install right now."* ]]
+    [[ "$output" != *"didn't go through"* ]]
+    [[ "$output" != *"Try"*"again"* ]]
+    grep -q '"outcome":"WAITING"' "$XDG_DATA_HOME/nudge/history.jsonl"
+    grep -q 'waiting (system, repo-tls): vim' "$XDG_DATA_HOME/nudge/history.jsonl"
+    grep -q '"exit_code":0}' "$XDG_DATA_HOME/nudge/history.jsonl"
+    [[ ! -s "$XDG_DATA_HOME/nudge/failures.tsv" ]]
+    [[ -z "$(ls -A "$XDG_DATA_HOME/nudge/reports" 2>/dev/null)" ]]
+    [[ -z "$(ls -A "$XDG_DATA_HOME/nudge/crash-reports" 2>/dev/null)" ]]
+    [[ "$(cut -f2,3,6 "$XDG_DATA_HOME/nudge/waiting.tsv")" == $'vim\tstandard\trepo.example.org' ]]
+    # the list, by severity
+    run "$NUDGE" --waiting
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"Standard · waiting quietly: offered again once the download answers"* ]]
+    [[ "$output" == *"vim"*"repo.example.org: certificate does not verify from here"* ]]
+    # the next login: the download still does not answer, so there is nothing to ask about
+    local prompts
+    prompts=$(grep -c -- '--yesnocancel' "$_INTEGRATION_TMPDIR/kdialog.log" || true)
+    : > "$APT_LOG"
+    PROBE_CODE=000 run env DISPLAY=:0 KDE_SESSION_VERSION=5 _NUDGE_TRIGGER=login "$NUDGE"
+    [[ "$status" -eq 0 ]]
+    [[ "$(grep -c -- '--yesnocancel' "$_INTEGRATION_TMPDIR/kdialog.log" || true)" -eq "$prompts" ]]
+    grep -qx 'probe https://repo.example.org/pool/main/x/vim/vim_1.0_amd64.deb' "$APT_LOG"
+    run ! grep -q 'full-upgrade' "$APT_LOG"
+    [[ "$(tail -1 "$XDG_DATA_HOME/nudge/history.jsonl")" == *'"outcome":"NO_UPDATES","detail":"waiting: vim"'* ]]
+    run "$NUDGE" --check-only
+    [[ "$output" == *"everything else is up to date · 1 waiting for a download"* ]]
+    # once it answers, it is offered again, and going in takes it off the list
+    export BLOCKED=""
+    PROBE_CODE=206 run env DISPLAY=:0 KDE_SESSION_VERSION=5 _NUDGE_TRIGGER=login "$NUDGE"
+    [[ "$status" -eq 0 ]]
+    [[ "$(grep -c -- '--yesnocancel' "$_INTEGRATION_TMPDIR/kdialog.log" || true)" -gt "$prompts" ]]
+    grep -qx 'full-upgrade' "$APT_LOG"
+    [[ "$(tail -1 "$XDG_DATA_HOME/nudge/history.jsonl")" == *'"outcome":"APPLIED"'* ]]
+    [[ ! -e "$XDG_DATA_HOME/nudge/waiting.tsv" ]]
+}
+
+@test "a critical update that cannot be downloaded is not set aside: it is named, asked about and counted" {
+    _integration_mocks
+    _integration_terminal
+    _integration_kdialog all
+    _integration_blocked_apt
+    export PENDING="openssl vim" BLOCKED="openssl vim"
+    # the answer is no, so nothing reaches the selection's own commands (sudo)
     run bash -c "printf 'n\n' | env DISPLAY=:0 KDE_SESSION_VERSION=5 '$NUDGE'"
     [[ "$status" -eq 3 ]]
-    [[ "$output" == *"could not download: vim"* ]]
-    [[ "$output" == *"1 other update can go in without it; it stays for later."* ]]
-    [[ "$output" == *"Try again without it? [Y/n]"* ]]
+    [[ "$output" == *"vim is waiting: repo.example.org cannot be reached from here right now."* ]]
+    [[ "$output" == *"could not download: openssl"* ]]
+    [[ "$output" == *"Try the failed ones again? [Y/n]"* ]]
     grep -q '"outcome":"FAILED"' "$XDG_DATA_HOME/nudge/history.jsonl"
     grep -q 'retry declined' "$XDG_DATA_HOME/nudge/history.jsonl"
-    [[ "$(cut -f2 "$XDG_DATA_HOME/nudge/failures.tsv")" == "vim" ]]
+    grep -q 'waiting (system, repo-tls): vim' "$XDG_DATA_HOME/nudge/history.jsonl"
+    # only the important one is failing; both are on the waiting list, by severity
+    [[ "$(cut -f2 "$XDG_DATA_HOME/nudge/failures.tsv")" == "openssl" ]]
+    [[ "$(cut -f2,3 "$XDG_DATA_HOME/nudge/waiting.tsv" | LC_ALL=C sort)" == $'openssl\tcritical\nvim\tstandard' ]]
+    run "$NUDGE" --waiting --json
+    [[ "$output" == *'"target":"openssl","severity":"critical"'*'"policy":"retried"'* ]]
+    [[ "$output" == *'"target":"vim","severity":"standard"'*'"policy":"waits"'* ]]
+    # the important one is never held back: the next run offers it again
+    : > "$APT_LOG"
+    PROBE_CODE=000 run bash -c "printf 'n\n' | env DISPLAY=:0 KDE_SESSION_VERSION=5 '$NUDGE' --check-only"
+    [[ "$output" == *"nudge: 1 updates available"*"1 waiting for a download"* ]]
+    run ! grep -q 'probe .*openssl' "$APT_LOG"
+    run "$NUDGE" --waiting --clear
+    [[ "$output" == "Forgot 2 waiting update(s). nudge will offer them again." ]]
+    [[ ! -e "$XDG_DATA_HOME/nudge/waiting.tsv" ]]
 }
 
 @test "cancelling the scope picker is a decline at the selection menu" {

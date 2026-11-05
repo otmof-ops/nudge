@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] — 2026-11-05
+
+What cannot be downloaded waits; it does not fail.
+
+### Added
+- **The waiting list.** A standard update whose download cannot be fetched
+  (the repository does not answer from this network, its certificate does not
+  verify, the mirror has not caught up) is set aside without a question, and
+  the rest of its list goes in straight away. The session ends "all done!"
+  with one quiet line naming what waits; when everything picked only waits it
+  says there is nothing to install right now and the history records
+  `WAITING` (exit 0), not `FAILED`. Waiting updates are kept in
+  `~/.local/share/nudge/waiting.tsv` with their severity, version, cause and
+  host, are not counted in the failure ledger, and get no failure report or
+  failure dialog.
+- **The check holds back what still waits.** Before the prompt, nudge asks
+  apt where each waiting standard update's download comes from and fetches
+  one byte of it (`curl -r 0-0`, certificate verified, nothing written). While
+  it does not answer, the update stays out of the count, the preview and the
+  dialog (which says how many wait), and a login with nothing else pending
+  stays quiet; in the menu it is shown unticked, "waiting for its download".
+  Once the download answers it is offered again, and going in takes it off
+  the list. When nudge cannot tell (no curl or wget, or apt goes through a
+  proxy of its own) a waiting update rides along again a week after it was
+  last tried.
+- **Critical and security updates never wait.** They are listed on the
+  waiting list by severity, but they are offered every run, retried, counted
+  and reported as before.
+- `nudge --waiting` (`--json`, `--clear`) lists what waits, grouped Critical,
+  Security, Standard, with what each tier does.
+- `SET_ASIDE_STANDARD` (default `true`); `false` brings back the question for
+  standard updates too.
+- `--check-only` and the JSON output (`updates_waiting`) count what waits
+  apart from what is available.
+
+### Changed
+- A session that leaves something important for later says nudge tries it
+  again next time.
+
 ## [2.4.0] — 2026-10-27
 
 What can be downloaded goes in; what cannot waits.
